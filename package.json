@@ -1,0 +1,33 @@
+{
+  "name": "nestjs-canonical-log",
+  "version": "0.1.0",
+  "description": "Stripe-style canonical log lines for NestJS — one structured line per HTTP request",
+  "keywords": ["nestjs", "logging", "pino", "datadog", "observability", "canonical-log"],
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "dev": "tsc --watch --build tsconfig.build.json",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^10.0.0 || ^11.0.0",
+    "@nestjs/core": "^10.0.0 || ^11.0.0",
+    "nestjs-cls": "^4.0.0",
+    "nestjs-pino": "^3.0.0 || ^4.0.0",
+    "reflect-metadata": "^0.1.0 || ^0.2.0",
+    "rxjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/common": "10.2.10",
+    "@nestjs/core": "10.2.10",
+    "@nestjs/platform-express": "10.2.10",
+    "nestjs-cls": "^4.3.0",
+    "nestjs-pino": "^3.5.0",
+    "rxjs": "^7.8.0",
+    "typescript": "^5.0.0"
+  }
+}
