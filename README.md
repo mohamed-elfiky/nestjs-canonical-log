@@ -304,7 +304,7 @@ Custom platform: implement `CanonicalHttpAdapter` (two methods: `getRoutePath` a
 
 ## Correlation IDs (Datadog)
 
-`dd.trace_id` / `dd.span_id` are injected automatically by `dd-trace` when `logInjection: true` is set in the tracer init. Zero code needed in this module — they appear in every pino log line including the canonical one.
+Correlation Ids should be injected automatically by your instrumentaion library. Zero code needed in this module they should appear in every log line including the canonical one.
 
 ---
 
