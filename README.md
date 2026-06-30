@@ -81,7 +81,7 @@ This is why:
 - **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
 - **Kernel fields** (`tenant_id`, `actor_id`, `actor_type`) are cross-cutting and owned by the auth layer. One place, one team, one contract.
 - **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
-- **Field names follow OTEL semantic conventions.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by Datadog. If you migrate from logs to spans, the field names port without renaming.
+- **Field names follow OTEL semantic conventions.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous obserability tools. If you migrate from logs to spans, the field names port without renaming.
 
 ### Why logs, not spans
 
@@ -302,7 +302,7 @@ Custom platform: implement `CanonicalHttpAdapter` (two methods: `getRoutePath` a
 
 ---
 
-## Correlation IDs (Datadog)
+## Correlation IDs
 
 Correlation Ids should be injected automatically by your instrumentaion library. Zero code needed in this module they should appear in every log line including the canonical one.
 
@@ -321,7 +321,7 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `http.route`                | http spans    | interceptor              | parameterized template, e.g. `/v1/jobs/:id`    |
 | `http.response.status_code` | http spans    | interceptor / filter     |                                                |
 | `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable |
-| `outcome`                   | —             | interceptor / filter     | `"ok"` or `"error"` — cheap Datadog facet      |
+| `outcome`                   | —             | interceptor / filter     | `"ok"` or `"error"`                            |
 | `error.type`                | error attrs   | filter                   | exception class name                           |
 | `error.message`             | error attrs   | filter                   | exception message                              |
 | `tenant_id`                 | —             | caller (auth layer)      | kernel field, optional                         |
