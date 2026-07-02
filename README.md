@@ -21,24 +21,23 @@ INFO  Status updated successfully
 INFO  Returning 200
 ```
 
-This feels thorough. It is not observability. It is breadcrumbs.
-
 The problems:
 
 - **You can't query it.** "How many jobs were updated by tenant X in the last hour, and what was the p99 latency?" requires parsing free-text across millions of lines.
 - **It breaks on failure.** The exception bubbles before the "returning 200" line emits. You get half a trail and have to infer the rest.
-- **Volume without density.** Six lines, one request, none of them individually answerable. You need all six to reconstruct what happened — and they're interleaved with every other concurrent request.
+- **Volume without density.** Six lines, one request, none of them individually answerable. You need all six to reconstruct what happened — and they're interleaved with every other concurrent request. Even with tracing, you're still reconstructing state from six partial lines instead of reading one.
 - **It's random.** Every engineer decides independently what to log, when, and with what fields. There is no contract.
+- **Structured isn't enough.** Structured logs alone don't fix this. In a large org, you can't reliably get every team to design their logs with observability in mind. Canonical logs shift the mindset: the log line becomes part of the design step, not an afterthought.
 
 ### Calculated observability
 
-Observability, properly defined, is the ability to ask arbitrary questions about your system's behaviour from the outside — without shipping new code to answer them. The key word is **arbitrary**: you don't know in advance what questions an incident will require.
+Observability, properly defined, is the ability to ask arbitrary questions about your system's behavior from the outside, without shipping new code to answer them. The key word is **arbitrary**: you don't know in advance what questions an incident will require.
 
 The canonical log pattern is the practical implementation of this for request-scoped systems. The insight is simple:
 
 > **One request = one event. The event is the unit of observability.**
 
-Instead of emitting breadcrumbs as the request progresses, you accumulate facts into a single structured record and emit it exactly once at the end — success or failure. That record is your event. It is flat, dense, and queryable.
+Instead of emitting breadcrumbs as the request progresses, you accumulate facts into a single structured record and emit it exactly once at the end. Either success or failure. That record is your event. It is flat, dense, and queryable.
 
 Now "how many jobs were updated by tenant X in the last hour, p99 latency?" is a single Datadog query:
 
@@ -54,9 +53,9 @@ This is the single most important property of the pattern and the hardest to get
 
 **The line must emit on failure, with full error detail.** Not "usually". Not "unless it's a 500". Always.
 
-This is why Stripe wraps the entire request in a Ruby `ensure` block — the canonical equivalent of `finally`. A line that only emits on success is useless for the one case where you need it most: the 3am incident where the request died mid-flight and you need to know exactly where and why.
+This is why Stripe wraps the entire request in a Ruby `ensure` block this is the canonical equivalent of `finally`. A line that only emits on success is useless for the one case where you need it most: the 3am incident where the request died mid-flight and you need to know exactly where and why.
 
-This implementation achieves failure-correctness through a split: the interceptor drains on success, the exception filter drains on error, and `drain()` is idempotent so both can call it without coordination. The flag that enforces exactly-once lives in the per-request CLS bag, not in the callers.
+This implementation achieves failure-correctness through a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if the two paths ever overlap the second call is a safe no-op. The flag that enforces exactly-once lives in the per-request CLS bag, not in the callers, so no coordination is needed.
 
 ### Sparseness is signal
 
@@ -81,7 +80,7 @@ This is why:
 - **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
 - **Kernel fields** (`tenant_id`, `actor_id`, `actor_type`) are cross-cutting and owned by the auth layer. One place, one team, one contract.
 - **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
-- **Field names follow OTEL semantic conventions.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous obserability tools. If you migrate from logs to spans, the field names port without renaming.
+- **Field names follow OTEL semantic conventions.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. If you migrate from logs to spans, the field names port without renaming.
 
 ### Why logs, not spans
 
@@ -89,7 +88,7 @@ Distributed tracing spans are the richer primitive: they carry timing, parent-ch
 
 For example Datadog APM spans are priced per ingested volume. At scale, this is significant. Log management is priced differently. And a single structured log line per request at log-management pricing gives you the same analytics capability for incident triage and SLO tracking.
 
-The tradeoff you accept: no automatic cross-service trace stitching from canonical logs alone. If you need distributed traces (and you might), run `dd-trace` alongside. The canonical line and the APM trace are complementary. The trace gives you the distributed call graph; the canonical line gives you the per-request summary row that answers "what happened and to whom" without opening a trace viewer.
+The tradeoff you accept: no automatic cross-service trace stitching from canonical logs alone. If you need distributed traces, run a tracing library like OpenTelemetry or `dd-trace` alongside. The canonical line and the APM trace are complementary. The trace gives you the distributed call graph; the canonical line gives you the per-request summary row that answers "what happened and to whom" without opening a trace viewer.
 
 Field names follow OTEL so that if you later decide the traces are worth the cost, migrating is a configuration change, not a field rename.
 
@@ -176,14 +175,14 @@ Request
 │ status ✓   │  │ error.type ✓              │
 │ duration ✓ │  │ error.message ✓           │
 │ outcome:ok │  │ outcome:error             │
-│ drain() ✓  │  │ drain() ✓                 │
+│ flush() ✓  │  │ flush() ✓                 │
 └────────────┘  │ super.catch() → response  │
                 └──────────────────────────┘
 ```
 
-**Key invariant:** `drain()` is idempotent — whichever path fires first, the line emits once. The flag lives in the CLS bag, not in the callers, so there is no coordination needed between interceptor and filter.
+**Key invariant:** `flush()` is idempotent — whichever path fires first, the line emits once. The flag lives in the CLS bag, not in the callers, so there is no coordination needed between interceptor and filter.
 
-**Why finalize() skips drain() on error:** In NestJS, RxJS `finalize()` fires *before* the exception filter (finalize is observable teardown; the filter is called after the subscription settles). If finalize drained unconditionally, the line would emit without error fields. The interceptor tracks `hasError` via `tap({ error })` and skips drain on the error path, leaving it to the filter.
+**Why finalize() skips flush() on error:** In NestJS, RxJS `finalize()` fires *before* the exception filter (finalize is observable teardown; the filter is called after the subscription settles). If finalize flushed unconditionally, the line would emit without error fields. The interceptor tracks `hasError` via `tap({ error })` and skips flush on the error path, leaving it to the filter.
 
 ---
 
@@ -194,6 +193,8 @@ npm install nestjs-canonical-log
 # peer deps
 npm install nestjs-cls nestjs-pino rxjs reflect-metadata
 ```
+
+Note: `nestjs-pino` is only required if you use the default logger — bring your own to drop it.
 
 ---
 

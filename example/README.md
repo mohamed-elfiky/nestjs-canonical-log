@@ -4,9 +4,15 @@ A minimal NestJS app that wires `nestjs-canonical-log` end-to-end and demonstrat
 
 ## Run it
 
+The example consumes `nestjs-canonical-log` as a locally-linked workspace package (`"nestjs-canonical-log": "workspace:*"`), so build the library first, then start the app:
+
 ```bash
+# From the repo root — build the library into dist/
+pnpm install
+pnpm build
+
+# Then run the example
 cd example
-pnpm install   # first time only
 pnpm start
 ```
 

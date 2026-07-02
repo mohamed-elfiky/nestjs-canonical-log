@@ -16,7 +16,7 @@ const DEFAULT_BAG_TTL_MS = 30_000
 export class CanonicalLogService {
   // Singleton counter — tracks how many requests currently have an active bag.
   // Safe without locks: Node.js event loop is single-threaded; increment
-  // (initialize) and decrement (drain / TTL expiry) are both synchronous.
+  // (initialize) and decrement (flush / TTL expiry) are both synchronous.
   private activeBags = 0
   private readonly maxActiveBags: number
   private readonly bagTtlMs: number
@@ -76,11 +76,11 @@ export class CanonicalLogService {
    * Called once by CanonicalLogMiddleware at the start of each request.
    *
    * If the CLS store is at capacity (activeBags >= maxActiveBags), the
-   * request is shed: no bag is created, addFields/drain become no-ops.
+   * request is shed: no bag is created, addFields/flush become no-ops.
    * The request itself is completely unaffected — only the canonical line
    * is lost.
    *
-   * A TTL timer is armed on the bag. If drain() is never called (hung
+   * A TTL timer is armed on the bag. If flush() is never called (hung
    * request, crash outside NestJS's filter chain), the timer evicts the
    * bag and decrements the counter so the store doesn't leak.
    */
@@ -128,10 +128,10 @@ export class CanonicalLogService {
   /**
    * Emit the canonical line exactly once. Subsequent calls for the same
    * request are no-ops — the idempotency flag lives in the bag, not in
-   * the callers, so interceptor and filter can both call drain() safely.
+   * the callers, so interceptor and filter can both call flush() safely.
    * No-op if this request was shed.
    */
-  drain(): void {
+  flush(): void {
     const bag = this.getBag()
     if (!bag || bag.__emitted) return
 

@@ -8,10 +8,6 @@
     "strictNullChecks": true,
     "noImplicitAny": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-    "baseUrl": ".",
-    "paths": {
-      "nestjs-canonical-log": ["../src/index.ts"]
-    }
+    "emitDecoratorMetadata": true
   }
 }

@@ -12,19 +12,16 @@ export interface FrameworkFields {
 
   /**
    * Logical name of the service emitting the log.
-   * OTEL: resource attribute "service.name".
    */
   'service.name': string
 
   /**
    * Runtime environment label (e.g. "prod", "staging", "dev").
-   * OTEL: resource attribute "deployment.environment".
    */
   'deployment.environment'?: string
 
   /**
    * HTTP verb in uppercase (e.g. "GET", "POST", "PATCH").
-   * OTEL: "http.request.method".
    */
   'http.request.method': string
 
@@ -33,14 +30,12 @@ export interface FrameworkFields {
    * e.g. "/v1/jobs/:id" not "/v1/jobs/abc123".
    * Seeded with the raw path by middleware; overwritten with the template
    * by the interceptor once NestJS has resolved the handler.
-   * OTEL: "http.route".
    */
   'http.route': string
 
   /**
    * HTTP response status code (e.g. 200, 404, 500).
    * NOTE: do NOT use a top-level "status" key — Datadog treats it as log severity.
-   * OTEL: "http.response.status_code".
    */
   'http.response.status_code'?: number
 
@@ -58,14 +53,12 @@ export interface FrameworkFields {
   /**
    * The exception / error type name, e.g. "NotFoundException", "QueryTimeoutError".
    * Only present when outcome is "error".
-   * OTEL: "error.type".
    */
   'error.type'?: string
 
   /**
    * The exception message string.
    * Only present when outcome is "error".
-   * OTEL: "error.message" (also mirrors exception.message on span events).
    */
   'error.message'?: string
 }
@@ -128,7 +121,7 @@ export interface CanonicalLogOptions {
 
   /**
    * TTL in milliseconds for a bag in the CLS store.
-   * If drain() is never called (hung request, uncaught exception outside
+   * If flush() is never called (hung request, uncaught exception outside
    * NestJS's filter chain), the bag is automatically evicted after this
    * duration and the activeBags counter is decremented.
    * Default: 30_000 (30 seconds). Set to 0 to disable.
@@ -136,7 +129,7 @@ export interface CanonicalLogOptions {
    * How to pick this number:
    * Set it above your p99.9 request latency — the slowest 1-in-1000 request
    * you see in production — plus ~50% headroom. This ensures legitimately
-   * slow requests complete and drain() normally before the TTL fires.
+   * slow requests complete and flush() normally before the TTL fires.
    * Setting it too low evicts slow-but-valid requests and silently drops
    * their canonical lines. Setting it too high increases how long a leaked
    * bag holds its slot in the store before being reclaimed.
@@ -150,7 +143,7 @@ export interface CanonicalLogOptions {
   /**
    * Hard cap on the number of concurrent active bags in the CLS store.
    * When this limit is reached, new requests are shed: initialize() skips
-   * bag creation, addFields() and drain() become no-ops for that request.
+   * bag creation, addFields() and flush() become no-ops for that request.
    * The request itself is completely unaffected — only the canonical line
    * is lost. Prevents the CLS store from growing unboundedly under load.
    *
@@ -209,15 +202,15 @@ export const CANONICAL_LOGGER = Symbol('CANONICAL_LOGGER')
  * object spread automatically and cannot be accidentally overwritten by callers.
  */
 export interface CanonicalBagMeta {
-  /** True once drain() has fired. Prevents the line from being emitted twice. */
+  /** True once flush() has fired. Prevents the line from being emitted twice. */
   __emitted: boolean
 
   /** Start time from process.hrtime.bigint(), used to compute duration_ms. */
   __startedAt: bigint
 
   /**
-   * TTL timer handle. Set in initialize(), cancelled in drain().
-   * If drain() never fires (hung request, process crash mid-flight),
+   * TTL timer handle. Set in initialize(), cancelled in flush().
+   * If flush() never fires (hung request, process crash mid-flight),
    * the timer fires and decrements activeBags to prevent counter leak.
    * The timer callback uses a closure reference to the bag — NOT getCls() —
    * because it fires outside the original async context.

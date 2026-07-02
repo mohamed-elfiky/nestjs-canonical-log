@@ -16,7 +16,7 @@ import { CANONICAL_HTTP_ADAPTER } from './canonical-log.types'
  * framework internals.
  *
  * By extending it, we get a clean two-step separation:
- *   1. Our catch() — observability only: enrich bag, drain canonical line.
+ *   1. Our catch() — observability only: enrich bag, flush canonical line.
  *   2. super.catch() — response only: let NestJS send the HTTP error response.
  *
  * If we skipped super.catch(), the exception would be swallowed: no response
@@ -83,14 +83,14 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
         'error.message': errorMessage,
       })
 
-      // drain() is idempotent — if the interceptor's finalize() somehow already
+      // flush() is idempotent — if the interceptor's finalize() somehow already
       // fired (edge case), this is a safe no-op.
-      this.svc.drain()
+      this.svc.flush()
     }
 
     // Hand off to BaseExceptionFilter to send the actual HTTP error response.
-    // This MUST come after drain() so the canonical line is emitted before the
-    // response is flushed — order matters for log correlation in Datadog.
+    // This MUST come after flush() so the canonical line is emitted before the
+    // response is sent — order matters for log correlation in Datadog.
     super.catch(exception, host)
   }
 }
