@@ -5,8 +5,7 @@ import {
   Injectable,
   NestInterceptor,
 } from '@nestjs/common'
-import type { Observable } from 'rxjs'
-import { finalize, tap } from 'rxjs/operators'
+import { finalize, tap, type Observable } from 'rxjs'
 import type { CanonicalHttpAdapter } from './canonical-log.adapter'
 import { CanonicalLogService } from './canonical-log.service'
 import { CANONICAL_HTTP_ADAPTER } from './canonical-log.types'

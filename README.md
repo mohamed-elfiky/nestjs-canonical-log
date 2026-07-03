@@ -80,7 +80,7 @@ This is why:
 - **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
 - **Kernel fields** (`tenant_id`, `actor_id`, `actor_type`) are cross-cutting and owned by the auth layer. One place, one team, one contract.
 - **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
-- **Field names follow OTEL semantic conventions.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. If you migrate from logs to spans, the field names port without renaming.
+- **Field names follow OTEL semantic conventions where practical.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. A few fields — `duration_ms` (OTEL uses `duration` in nanoseconds; we use ms for human readability) and `outcome` (custom, not in OTEL) — deviate deliberately. Most fields port cleanly if you migrate from logs to spans; those two would need renaming.
 
 ### Why logs, not spans
 
@@ -90,7 +90,11 @@ For example Datadog APM spans are priced per ingested volume. At scale, this is 
 
 The tradeoff you accept: no automatic cross-service trace stitching from canonical logs alone. If you need distributed traces, run a tracing library like OpenTelemetry or `dd-trace` alongside. The canonical line and the APM trace are complementary. The trace gives you the distributed call graph; the canonical line gives you the per-request summary row that answers "what happened and to whom" without opening a trace viewer.
 
-Field names follow OTEL so that if you later decide the traces are worth the cost, migrating is a configuration change, not a field rename.
+Most field names follow OTEL so that if you later decide traces are worth the cost, migrating is mostly a configuration change rather than a codebase-wide rename.
+
+### PII
+
+Canonical logs concentrate risk — one line packs tenant, actor, and error message. This library does no redaction; configure `redact` on your pino logger and don't put raw PII in `addFields()`.
 
 ---
 
@@ -305,7 +309,7 @@ Custom platform: implement `CanonicalHttpAdapter` (two methods: `getRoutePath` a
 
 ## Correlation IDs
 
-Correlation Ids should be injected automatically by your instrumentaion library. Zero code needed in this module they should appear in every log line including the canonical one.
+Correlation IDs should be injected automatically by your instrumentation library. Zero code needed in this module — they appear in every log line, including the canonical one.
 
 ---
 
@@ -322,9 +326,9 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `http.route`                | http spans    | interceptor              | parameterized template, e.g. `/v1/jobs/:id`    |
 | `http.response.status_code` | http spans    | interceptor / filter     |                                                |
 | `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable |
-| `outcome`                   | —             | interceptor / filter     | `"ok"` or `"error"`                            |
-| `error.type`                | error attrs   | filter                   | exception class name                           |
-| `error.message`             | error attrs   | filter                   | exception message                              |
+| `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)    |
+| `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)     |
+| `error.message`             | error attrs   | filter                   | exception message (contextual — no stack; use an error tracker for that) |
 | `tenant_id`                 | —             | caller (auth layer)      | kernel field, optional                         |
 | `actor_id`                  | —             | caller (auth layer)      | kernel field, optional                         |
 | `actor_type`                | —             | caller (auth layer)      | kernel field, optional                         |

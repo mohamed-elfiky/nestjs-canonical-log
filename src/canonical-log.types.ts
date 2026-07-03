@@ -35,20 +35,21 @@ export interface FrameworkFields {
 
   /**
    * HTTP response status code (e.g. 200, 404, 500).
-   * NOTE: do NOT use a top-level "status" key — Datadog treats it as log severity.
    */
   'http.response.status_code'?: number
 
-  /** Wall-clock milliseconds from request arrival to response (or error). */
+  /** Monotonic clock. Milliseconds from request arrival to response (or error). */
   duration_ms?: number
 
   /**
    * Coarse outcome of the request.
-   * "ok"    — handler completed and a non-5xx response was sent.
-   * "error" — an exception was thrown (guard, pipe, controller, or filter).
-   * Not an OTEL concept; kept for cheap Datadog faceting without a custom parser.
+   * "ok"      — handler completed and a non-5xx response was sent.
+   * "error"   — an exception was thrown (guard, pipe, controller, or filter).
+   * "timeout" — the bag's TTL expired without flush() being called; the line
+   *             is emitted with whatever fields accumulated so far so leaked
+   *             requests remain queryable.
    */
-  outcome?: 'ok' | 'error'
+  outcome?: 'ok' | 'error' | 'timeout'
 
   /**
    * The exception / error type name, e.g. "NotFoundException", "QueryTimeoutError".
@@ -170,6 +171,18 @@ export interface CanonicalLogOptions {
 /** CLS store key for the canonical bag. Prefixed to avoid collisions with other CLS users. */
 export const CANONICAL_LOG_BAG_KEY = '__nestjs_canonical_log__'
 
+/** CLS store key marking a request as shed (store at capacity when it arrived). */
+export const CANONICAL_LOG_SHED_KEY = '__nestjs_canonical_log_shed__'
+
+// Symbol keys for internal bag state.
+// Keeping these unexported at the package level means callers physically cannot
+// obtain them via `addFields()` — Object.assign copies own symbol keys, but the
+// caller has no reference to construct one. Symbols are also excluded from
+// JSON.stringify, so they naturally drop out of the emitted log line.
+export const EMITTED: unique symbol = Symbol('canonical.emitted')
+export const STARTED_AT: unique symbol = Symbol('canonical.startedAt')
+export const TTL_TIMER: unique symbol = Symbol('canonical.ttlTimer')
+
 /** DI token for CanonicalLogOptions registered via forRoot(). */
 export const CANONICAL_LOG_OPTIONS = Symbol('CANONICAL_LOG_OPTIONS')
 
@@ -191,31 +204,28 @@ export const CANONICAL_LOGGER = Symbol('CANONICAL_LOGGER')
 /**
  * Internal tracking fields carried alongside user-visible fields in the CLS bag.
  *
- * Double underscore (__) rather than single (_) is intentional:
- * - Single _ is the JS/TS convention for "unused variable" (e.g. `_res`, `_e`).
- *   Using it here would visually collide with the destructure-alias pattern
- *   that strips these fields before emit: `const { __emitted: _e, ... } = bag`.
- * - Double __ signals "internal implementation detail of the bag mechanism" —
- *   a stronger visual separator from both unused-variable aliases and domain fields.
- *
- * A future improvement would use Symbol keys instead, which are excluded from
- * object spread automatically and cannot be accidentally overwritten by callers.
+ * These live under module-private Symbol keys (EMITTED, STARTED_AT, TTL_TIMER)
+ * for two reasons:
+ *  - Callers cannot accidentally overwrite them via addFields() because they
+ *    have no reference to the symbols.
+ *  - Symbol-keyed properties are excluded from JSON.stringify, so they drop out
+ *    of the emitted canonical line without any destructure-and-strip dance.
  */
 export interface CanonicalBagMeta {
   /** True once flush() has fired. Prevents the line from being emitted twice. */
-  __emitted: boolean
+  [EMITTED]: boolean
 
   /** Start time from process.hrtime.bigint(), used to compute duration_ms. */
-  __startedAt: bigint
+  [STARTED_AT]: bigint
 
   /**
    * TTL timer handle. Set in initialize(), cancelled in flush().
-   * If flush() never fires (hung request, process crash mid-flight),
-   * the timer fires and decrements activeBags to prevent counter leak.
+   * If flush() never fires, the timer emits a canonical line with
+   * outcome:'timeout' and decrements activeBags to prevent counter leak.
    * The timer callback uses a closure reference to the bag — NOT getCls() —
    * because it fires outside the original async context.
    */
-  __ttlTimer: ReturnType<typeof setTimeout> | undefined
+  [TTL_TIMER]: ReturnType<typeof setTimeout> | undefined
 }
 
 /**

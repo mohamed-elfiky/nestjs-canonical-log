@@ -44,49 +44,61 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
   }
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    if (host.getType() === 'http') {
-      const req = host.switchToHttp().getRequest<unknown>()
-
-      const status =
-        exception instanceof HttpException
-          ? exception.getStatus()
-          : HttpStatus.INTERNAL_SERVER_ERROR
-
-      const errorMessage =
-        exception instanceof HttpException
-          ? (() => {
-              const response = exception.getResponse()
-              if (typeof response === 'string') return response
-              if (typeof response === 'object' && response !== null) {
-                const r = response as Record<string, unknown>
-                if (typeof r['message'] === 'string') return r['message']
-              }
-              return exception.message
-            })()
-          : exception instanceof Error
-            ? exception.message
-            : String(exception)
-
-      // Ensure http.route is set even for unmatched routes (404s skip the
-      // interceptor entirely since no handler is resolved for them).
-      const route = this.adapter.getRoutePath(req) ?? this.adapter.getRawPath(req)
-
-      this.svc.addFields({
-        'http.route': route,
-        'http.response.status_code': status,
-        duration_ms: this.svc.elapsedMs(),
-        outcome: 'error',
-        'error.type':
-          exception instanceof Error
-            ? exception.constructor.name
-            : typeof exception,
-        'error.message': errorMessage,
-      })
-
-      // flush() is idempotent — if the interceptor's finalize() somehow already
-      // fired (edge case), this is a safe no-op.
-      this.svc.flush()
+    // BaseExceptionFilter is designed for HTTP transports. For non-HTTP
+    // contexts (WebSocket, RPC) we skip both our observability work and
+    // super.catch() — the exception propagates as unhandled, which is the
+    // correct behavior since this library is scoped to HTTP requests.
+    if (host.getType() !== 'http') {
+      throw exception
     }
+
+    const req = host.switchToHttp().getRequest<unknown>()
+
+    const status =
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : HttpStatus.INTERNAL_SERVER_ERROR
+
+    const errorMessage =
+      exception instanceof HttpException
+        ? (() => {
+            const response = exception.getResponse()
+            if (typeof response === 'string') return response
+            if (typeof response === 'object' && response !== null) {
+              const r = response as Record<string, unknown>
+              if (typeof r['message'] === 'string') return r['message']
+            }
+            return exception.message
+          })()
+        : exception instanceof Error
+          ? exception.message
+          : String(exception)
+
+    // Ensure http.route is set even for unmatched routes (404s skip the
+    // interceptor entirely since no handler is resolved for them).
+    const route = this.adapter.getRoutePath(req) ?? this.adapter.getRawPath(req)
+
+    this.svc.addFields({
+      'http.route': route,
+      'http.response.status_code': status,
+      duration_ms: this.svc.elapsedMs(),
+      outcome: 'error',
+      // error.type is the queryable dimension (bounded cardinality — group by
+      // this to see error rates by class). error.message is contextual free
+      // text for human triage; it isn't group-by-able but it's filterable and
+      // readable in a log viewer. error.stack is deliberately omitted — too
+      // large for canonical logs and better handled by a dedicated error
+      // tracker (Sentry, Datadog Error Tracking) correlated via trace_id.
+      'error.type':
+        exception instanceof Error
+          ? exception.constructor.name
+          : typeof exception,
+      'error.message': errorMessage,
+    })
+
+    // flush() is idempotent — if the interceptor's finalize() somehow already
+    // fired (edge case), this is a safe no-op.
+    this.svc.flush()
 
     // Hand off to BaseExceptionFilter to send the actual HTTP error response.
     // This MUST come after flush() so the canonical line is emitted before the

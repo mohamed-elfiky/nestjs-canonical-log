@@ -3,7 +3,11 @@ import { ClsService } from 'nestjs-cls'
 import {
   CANONICAL_LOG_BAG_KEY,
   CANONICAL_LOG_OPTIONS,
+  CANONICAL_LOG_SHED_KEY,
   CANONICAL_LOGGER,
+  EMITTED,
+  STARTED_AT,
+  TTL_TIMER,
   type CanonicalBag,
   type CanonicalLogOptions,
   type ICanonicalLogger,
@@ -28,6 +32,11 @@ export class CanonicalLogService {
     @Inject(CANONICAL_LOG_OPTIONS)
     private readonly options: CanonicalLogOptions,
   ) {
+    if (!options.service || options.service.trim() === '') {
+      throw new Error(
+        'CanonicalLogModule.forRoot: `service` is required and must be a non-empty string.',
+      )
+    }
     this.maxActiveBags = options.maxActiveBags ?? DEFAULT_MAX_ACTIVE_BAGS
     this.bagTtlMs = options.bagTtlMs ?? DEFAULT_BAG_TTL_MS
   }
@@ -53,6 +62,11 @@ export class CanonicalLogService {
     // rather than crash — this happens for non-HTTP code paths and for
     // exceptions that escape before any middleware runs.
     if (!this.cls.isActive()) return
+
+    // Once a request is marked shed by initialize(), stay shed for the entire
+    // request. Prevents a lazy bag from being created mid-request with a
+    // wrong __startedAt/timestamp if the store drops below cap in the meantime.
+    if (this.cls.get(CANONICAL_LOG_SHED_KEY)) return
 
     // Lazily create the bag if it doesn't exist yet. This makes addFields()
     // tolerant of middleware ordering: a caller that runs before
@@ -81,8 +95,9 @@ export class CanonicalLogService {
    * is lost.
    *
    * A TTL timer is armed on the bag. If flush() is never called (hung
-   * request, crash outside NestJS's filter chain), the timer evicts the
-   * bag and decrements the counter so the store doesn't leak.
+   * request, crash outside NestJS's filter chain), the timer emits a
+   * canonical line with outcome:'timeout' so leaked requests remain
+   * queryable and decrements the counter so the store doesn't leak.
    */
   initialize(): void {
     // Idempotent: if a bag already exists in CLS (e.g. addFields() lazily
@@ -92,15 +107,20 @@ export class CanonicalLogService {
     if (this.getBag()) return
 
     if (this.maxActiveBags > 0 && this.activeBags >= this.maxActiveBags) {
+      // Mark shed so later addFields() calls stay no-ops even if the counter
+      // drops below cap mid-request.
+      if (this.cls.isActive()) {
+        this.cls.set(CANONICAL_LOG_SHED_KEY, true)
+      }
       return
     }
 
     this.activeBags++
 
     const bag: CanonicalBag = {
-      __emitted: false,
-      __startedAt: process.hrtime.bigint(),
-      __ttlTimer: undefined,
+      [EMITTED]: false,
+      [STARTED_AT]: process.hrtime.bigint(),
+      [TTL_TIMER]: undefined,
       timestamp: new Date().toISOString(),
       'service.name': this.options.service,
       ...(this.options.env
@@ -111,15 +131,21 @@ export class CanonicalLogService {
     if (this.bagTtlMs > 0) {
       // The timer fires outside the original CLS async context, so we
       // capture `bag` directly via closure instead of calling getBag().
-      bag.__ttlTimer = setTimeout(() => {
-        if (!bag.__emitted) {
-          bag.__emitted = true
-          this.activeBags--
-        }
+      bag[TTL_TIMER] = setTimeout(() => {
+        if (bag[EMITTED]) return
+        bag[EMITTED] = true
+        this.activeBags--
+
+        // Emit a partial canonical line so operators still see the request.
+        // duration_ms uses the TTL as a lower bound — actual duration unknown.
+        bag.outcome = 'timeout'
+        bag.duration_ms =
+          Number(process.hrtime.bigint() - bag[STARTED_AT]) / 1_000_000
+        this.emit(bag)
       }, this.bagTtlMs)
 
       // Don't let the timer keep the Node.js process alive during shutdown.
-      bag.__ttlTimer.unref()
+      bag[TTL_TIMER].unref()
     }
 
     this.cls.set(CANONICAL_LOG_BAG_KEY, bag)
@@ -133,29 +159,47 @@ export class CanonicalLogService {
    */
   flush(): void {
     const bag = this.getBag()
-    if (!bag || bag.__emitted) return
+    if (!bag || bag[EMITTED]) return
 
     // Cancel the TTL — request completed normally.
-    if (bag.__ttlTimer !== undefined) {
-      clearTimeout(bag.__ttlTimer)
-      bag.__ttlTimer = undefined
+    const timer = bag[TTL_TIMER]
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      bag[TTL_TIMER] = undefined
     }
 
-    bag.__emitted = true
+    bag[EMITTED] = true
     this.activeBags--
-
-    const { __emitted: _e, __startedAt: _s, __ttlTimer: _t, ...logFields } = bag
-    this.logger.info(logFields, 'canonical')
+    this.emit(bag)
   }
 
   /** Nanosecond-precision wall-clock ms since initialize(). */
   elapsedMs(): number | undefined {
     const bag = this.getBag()
-    if (!bag?.__startedAt) return undefined
-    return Number(process.hrtime.bigint() - bag.__startedAt) / 1_000_000
+    if (!bag) return undefined
+    return Number(process.hrtime.bigint() - bag[STARTED_AT]) / 1_000_000
   }
 
   private getBag(): CanonicalBag | undefined {
     return this.cls.get<CanonicalBag>(CANONICAL_LOG_BAG_KEY)
+  }
+
+  /**
+   * Write the bag to the underlying logger. Symbol-keyed internals (EMITTED,
+   * STARTED_AT, TTL_TIMER) are excluded automatically by JSON serialization,
+   * so the bag is passed through as-is.
+   *
+   * Observability failures must never affect the request. Wrap in try/catch
+   * and swallow — a broken logger should not propagate through flush() into
+   * the interceptor or exception filter.
+   */
+  private emit(bag: CanonicalBag): void {
+    try {
+      this.logger.info(bag, 'canonical')
+    } catch {
+      // Intentionally swallowed. Alternative: fall back to console.error, but
+      // that risks producing more noise from the very failure mode we're
+      // trying to isolate.
+    }
   }
 }

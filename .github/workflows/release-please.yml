@@ -1,0 +1,27 @@
+name: release-please
+
+# Watches main for conventional-commit messages, opens a "release PR" that
+# bumps package.json + updates CHANGELOG.md, and creates a git tag when the
+# release PR is merged. Does NOT publish to npm — a separate publish workflow
+# should trigger on the tag created here.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # Node preset: bumps package.json version, updates CHANGELOG.md,
+          # tags as vX.Y.Z, keeps the changelog in Keep-a-Changelog format.
+          release-type: node
+          # Anchor future changelog entries to what's already in CHANGELOG.md
+          # so existing history is preserved.
+          bootstrap-sha: HEAD

@@ -4,3 +4,4 @@ packages:
 allowBuilds:
   '@nestjs/core': true
   nestjs-pino: true
+  unrs-resolver: true
