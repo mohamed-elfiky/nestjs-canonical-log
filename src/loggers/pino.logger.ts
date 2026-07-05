@@ -1,5 +1,5 @@
 import { PinoLogger } from 'nestjs-pino'
-import type { ICanonicalLogger } from './canonical-log.types'
+import type { ICanonicalLogger } from '../canonical-log.types'
 
 /**
  * Default ICanonicalLogger, backed by nestjs-pino.

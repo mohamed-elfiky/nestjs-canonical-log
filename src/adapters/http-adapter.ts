@@ -6,7 +6,7 @@
  * (reply, end, setHeader, isHeadersSent, ...) but only exposes three
  * request methods: getRequestHostname, getRequestMethod, getRequestUrl.
  * No parameterized-route accessor, no raw-path helper. The request object stays
- * native (Express's req vs Fastify's req) so users can keep using their 
+ * native (Express's req vs Fastify's req) so users can keep using their
  * platform's middleware/plugin ecosystem. That leaves the shape differences
  * (req.route.path vs req.routerPath, etc.) for us to handle.
  */
@@ -24,35 +24,4 @@ export interface CanonicalHttpAdapter {
    * Used as a fallback when getRoutePath() returns undefined.
    */
   getRawPath(req: unknown): string | undefined
-}
-
-// ---------------------------------------------------------------------------
-// Built-in adapters
-// ---------------------------------------------------------------------------
-
-/** Adapter for @nestjs/platform-express (default). */
-export class ExpressAdapter implements CanonicalHttpAdapter {
-  getRoutePath(req: unknown): string | undefined {
-    const r = req as { route?: { path?: string } }
-    return r.route?.path
-  }
-
-  getRawPath(req: unknown): string | undefined {
-    const r = req as { path?: string; url?: string }
-    return r.path ?? r.url
-  }
-}
-
-/** Adapter for @nestjs/platform-fastify. */
-export class FastifyAdapter implements CanonicalHttpAdapter {
-  getRoutePath(req: unknown): string | undefined {
-    const r = req as { routerPath?: string; routeOptions?: { url?: string } }
-    return r.routerPath ?? r.routeOptions?.url
-  }
-
-  getRawPath(req: unknown): string | undefined {
-    const r = req as { url?: string }
-    // Fastify's req.url includes the query string — strip it.
-    return r.url?.split('?')[0]
-  }
 }

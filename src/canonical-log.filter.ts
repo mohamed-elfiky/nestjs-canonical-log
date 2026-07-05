@@ -1,6 +1,6 @@
 import { ArgumentsHost, Catch, HttpException, HttpStatus, Inject } from '@nestjs/common'
 import { BaseExceptionFilter } from '@nestjs/core'
-import type { CanonicalHttpAdapter } from './canonical-log.adapter'
+import type { CanonicalHttpAdapter } from './adapters/http-adapter'
 import { CanonicalLogService } from './canonical-log.service'
 import { CANONICAL_HTTP_ADAPTER } from './canonical-log.types'
 

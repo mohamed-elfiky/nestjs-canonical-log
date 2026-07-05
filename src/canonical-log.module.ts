@@ -7,10 +7,10 @@ import {
 } from '@nestjs/common'
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core'
 import { PinoLogger } from 'nestjs-pino'
-import { ExpressAdapter } from './canonical-log.adapter'
+import { ExpressAdapter } from './adapters/express.adapter'
 import { CanonicalLogExceptionFilter } from './canonical-log.filter'
 import { CanonicalLogInterceptor } from './canonical-log.interceptor'
-import { PinoCanonicalLogger } from './canonical-log.logger'
+import { PinoCanonicalLogger } from './loggers/pino.logger'
 import { CanonicalLogMiddleware } from './canonical-log.middleware'
 import { CanonicalLogService } from './canonical-log.service'
 import {

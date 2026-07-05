@@ -1,4 +1,4 @@
-import type { CanonicalHttpAdapter } from './canonical-log.adapter'
+import type { CanonicalHttpAdapter } from './adapters/http-adapter'
 
 // ---------------------------------------------------------------------------
 // Framework fields. Set by the library, don't override.
