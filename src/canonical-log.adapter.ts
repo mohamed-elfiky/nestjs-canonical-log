@@ -1,6 +1,14 @@
 /**
- * Adapter interface that abstracts platform-specific request inspection.
- * Implement this to support any HTTP adapter (Express, Fastify, custom).
+ * Adapter interface that abstracts platform-specific (Express, Fastify, etc.)
+ * HTTP request inspection. Implement this to support any HTTP adapter.
+ *
+ * Note: Nest's AbstractHttpAdapter fully wraps the response side
+ * (reply, end, setHeader, isHeadersSent, ...) but only exposes three
+ * request methods: getRequestHostname, getRequestMethod, getRequestUrl.
+ * No parameterized-route accessor, no raw-path helper. The request object stays
+ * native (Express's req vs Fastify's req) so users can keep using their 
+ * platform's middleware/plugin ecosystem. That leaves the shape differences
+ * (req.route.path vs req.routerPath, etc.) for us to handle.
  */
 export interface CanonicalHttpAdapter {
   /**

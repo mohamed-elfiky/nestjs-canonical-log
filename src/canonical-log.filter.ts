@@ -1,53 +1,26 @@
 import { ArgumentsHost, Catch, HttpException, HttpStatus, Inject } from '@nestjs/common'
-import { BaseExceptionFilter, HttpAdapterHost } from '@nestjs/core'
+import { BaseExceptionFilter } from '@nestjs/core'
 import type { CanonicalHttpAdapter } from './canonical-log.adapter'
 import { CanonicalLogService } from './canonical-log.service'
 import { CANONICAL_HTTP_ADAPTER } from './canonical-log.types'
 
 /**
  * Enriches the canonical record with error fields then emits the line.
- *
- * Why extend BaseExceptionFilter instead of implementing ExceptionFilter directly:
- *
- * BaseExceptionFilter is NestJS's built-in default handler. It knows how to
- * turn any exception into a well-formed HTTP response — correct status codes,
- * response body shape, header handling, and platform differences (Express vs
- * Fastify). Reimplementing that from scratch would be brittle and duplicate
- * framework internals.
- *
- * By extending it, we get a clean two-step separation:
- *   1. Our catch() — observability only: enrich record, flush canonical line.
- *   2. super.catch() — response only: let NestJS send the HTTP error response.
- *
- * If we skipped super.catch(), the exception would be swallowed: no response
- * would ever be sent to the client and the request would hang indefinitely.
- *
- * Why @Catch() with no arguments:
- * Catches ALL exceptions — HttpException, native Error, thrown strings, etc.
- * This is intentional: failure-correctness requires the canonical line to emit
- * regardless of what was thrown, including guard failures, pipe validation
- * errors, and unexpected non-Error throws.
+ * Extends BaseExceptionFilter to reuse Nest's default response handling
+ * (HttpException body preservation, http-errors compat, headers-sent guard,
+ * unknown-error logging).
  */
 @Catch()
 export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
-  /**
-   * HttpAdapterHost provides the underlying HTTP adapter (Express or Fastify)
-   * that BaseExceptionFilter needs to send the error response.
-   * NestJS injects it automatically when the filter is registered via APP_FILTER.
-   */
   constructor(
     private readonly svc: CanonicalLogService,
     @Inject(CANONICAL_HTTP_ADAPTER) private readonly adapter: CanonicalHttpAdapter,
-    adapterHost: HttpAdapterHost,
   ) {
-    super(adapterHost.httpAdapter)
+    super()
   }
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    // BaseExceptionFilter is designed for HTTP transports. For non-HTTP
-    // contexts (WebSocket, RPC) we skip both our observability work and
-    // super.catch() — the exception propagates as unhandled, which is the
-    // correct behavior since this library is scoped to HTTP requests.
+    // HTTP-only. For WebSocket/RPC, rethrow so downstream handlers see the exception.
     if (host.getType() !== 'http') {
       throw exception
     }
@@ -62,14 +35,14 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
     const errorMessage =
       exception instanceof HttpException
         ? (() => {
-            const response = exception.getResponse()
-            if (typeof response === 'string') return response
-            if (typeof response === 'object' && response !== null) {
-              const r = response as Record<string, unknown>
-              if (typeof r['message'] === 'string') return r['message']
-            }
-            return exception.message
-          })()
+          const response = exception.getResponse()
+          if (typeof response === 'string') return response
+          if (typeof response === 'object' && response !== null) {
+            const r = response as Record<string, unknown>
+            if (typeof r['message'] === 'string') return r['message']
+          }
+          return exception.message
+        })()
         : exception instanceof Error
           ? exception.message
           : String(exception)
@@ -83,12 +56,9 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
       'http.response.status_code': status,
       duration_ms: this.svc.elapsedMs(),
       outcome: 'error',
-      // error.type is the queryable dimension (bounded cardinality — group by
-      // this to see error rates by class). error.message is contextual free
-      // text for human triage; it isn't group-by-able but it's filterable and
-      // readable in a log viewer. error.stack is deliberately omitted — too
-      // large for canonical logs and better handled by a dedicated error
-      // tracker (Sentry, Datadog Error Tracking) correlated via trace_id.
+      // error.type (class name) is bounded i.e. has low cardinality. This is the queryable dimension.
+      // error.message is free text. It is contextual only, shouldn't be used for querying.
+      // error.stack is deliberately omitted to avoid leaking sensitive info into logs.
       'error.type':
         exception instanceof Error
           ? exception.constructor.name
@@ -96,13 +66,10 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
       'error.message': errorMessage,
     })
 
-    // flush() is idempotent — if the interceptor's finalize() somehow already
-    // fired (edge case), this is a safe no-op.
     this.svc.flush()
 
-    // Hand off to BaseExceptionFilter to send the actual HTTP error response.
-    // This MUST come after flush() so the canonical line is emitted before the
-    // response is sent — order matters for log correlation in Datadog.
+    // Must come after flush() so the canonical line is emitted before the
+    // response is sent. So it's guaranteed to have the Correlation-ID header if the logger is configured to include it.
     super.catch(exception, host)
   }
 }

@@ -39,20 +39,15 @@ export class CanonicalLogService {
   }
 
   /**
-   * Add fields to the current request's canonical record.
-   *
-   * Call this from any service, guard, or interceptor to contribute
-   * domain-specific fields. Use a locally-defined type as the type
-   * argument for call-site safety:
+   * Add fields to the current request's canonical record. Pass a local type
+   * for call-site safety:
    *
    *   type JobFields = { 'job.id'?: string }
    *   canonicalLog.addFields<JobFields>({ 'job.id': job.id })
    *
-   * Keys must be namespaced strings (e.g. "job.id", "billing.invoice_id")
-   * following OTEL semantic conventions style to avoid collisions.
-   * Framework and shared fields are reserved.
-   *
-   * No-op if this request was shed (store was at capacity when it arrived).
+   * Use namespaced keys (e.g. "job.id", "billing.invoice_id") to avoid
+   * collisions. Framework and shared fields are reserved.
+   * No-op if the request was shed.
    */
   addFields<T extends object>(fields: T): void {
     // No CLS context — nothing to persist to. Happens for non-HTTP code paths
@@ -82,16 +77,10 @@ export class CanonicalLogService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Called once by CanonicalLogMiddleware at the start of each request.
-   *
-   * If the CLS store is at capacity (activeRecords >= maxActiveRecords), the
-   * request is shed: no record is created, addFields/flush become no-ops.
-   * The request itself is completely unaffected, only the canonical line
-   * is lost.
-   *
-   * A TTL timer is attached to the record. If flush() is never called (hung
-   * request, crash outside NestJS's filter chain), the timer emits a
-   * canonical line with outcome:'timeout' and frees the counter slot.
+   * Starts a new record for the current request. Called once by the middleware.
+   * If we're at capacity, the request is shed (no record, no canonical line);
+   * the request itself still runs normally. A TTL timer covers hung requests
+   * — if flush() never fires, it emits with outcome:'timeout' and frees the slot.
    */
   initialize(): void {
     // If a record already exists (e.g. addFields() lazily created one before
@@ -99,8 +88,8 @@ export class CanonicalLogService {
     if (this.getRecord()) return
 
     if (this.maxActiveRecords > 0 && this.activeRecords >= this.maxActiveRecords) {
-      // Mark shed so later addFields() calls stay no-ops even if the counter
-      // drops below cap mid-request.
+      // Mark shed so addFields() stays a no-op for this request even if the
+      // counter drops below cap later.
       if (this.cls.isActive()) {
         this.cls.set(CANONICAL_LOG_SHED_KEY, true)
       }
@@ -121,22 +110,20 @@ export class CanonicalLogService {
     }
 
     if (this.recordTtlMs > 0) {
-      // The timer fires outside the original CLS async context, so we
-      // capture `record` directly via closure instead of calling getRecord().
+      // Timer fires outside CLS — capture `record` via closure.
       record[TTL_TIMER] = setTimeout(() => {
         if (record[EMITTED]) return
         record[EMITTED] = true
         this.activeRecords--
 
-        // Emit a partial canonical line so operators still see the request.
-        // duration_ms uses the TTL as a lower bound — actual duration unknown.
+        // Emit with what we have so hung requests stay visible.
         record.outcome = 'timeout'
         record.duration_ms =
           Number(process.hrtime.bigint() - record[STARTED_AT]) / 1_000_000
         this.emit(record)
       }, this.recordTtlMs)
 
-      // Don't let the timer keep the Node.js process alive during shutdown.
+      // Don't hold the process open on shutdown.
       record[TTL_TIMER].unref()
     }
 
@@ -144,10 +131,8 @@ export class CanonicalLogService {
   }
 
   /**
-   * Emit the canonical line exactly once. Subsequent calls for the same
-   * request are no-ops — the idempotency flag lives in the record, not in
-   * the callers, so interceptor and filter can both call flush() safely.
-   * No-op if this request was shed.
+   * Emit the canonical line. Idempotent — interceptor and filter can both
+   * call it, only the first one emits. No-op if the request was shed.
    */
   flush(): void {
     const record = this.getRecord()
@@ -177,21 +162,16 @@ export class CanonicalLogService {
   }
 
   /**
-   * Write the record to the underlying logger. Symbol-keyed internals
-   * (EMITTED, STARTED_AT, TTL_TIMER) are excluded automatically by JSON
-   * serialization, so the record is passed through as-is.
-   *
-   * Observability failures must never affect the request. Wrap in try/catch
-   * and swallow — a broken logger should not propagate through flush() into
-   * the interceptor or exception filter.
+   * Write the record to the logger. Symbol-keyed internals drop out via JSON
+   * serialization, so we pass the record as-is. Errors are swallowed —
+   * observability failures must not break the request.
    */
   private emit(record: CanonicalRecord): void {
     try {
       this.logger.info(record, 'canonical')
     } catch {
-      // Intentionally swallowed. Alternative: fall back to console.error, but
-      // that risks producing more noise from the very failure mode we're
-      // trying to isolate.
+      // Silent by design — falling back to console.error would only amplify
+      // the failure mode we're isolating.
     }
   }
 }

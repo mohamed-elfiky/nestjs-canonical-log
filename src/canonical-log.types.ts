@@ -29,11 +29,8 @@ export interface FrameworkFields {
   duration_ms?: number
 
   /**
-   * How the request ended.
-   *  - "ok"      — handled cleanly
-   *  - "error"   — something threw
-   *  - "timeout" — the request took longer than the TTL and we emitted
-   *                the line anyway so hung requests stay visible
+   * How the request ended: "ok", "error", or "timeout" (TTL expired before
+   * flush — we emit anyway so hung requests stay visible).
    */
   outcome?: 'ok' | 'error' | 'timeout'
 
@@ -75,24 +72,15 @@ export interface CanonicalLogOptions {
   logger?: ICanonicalLogger
 
   /**
-   * How long (ms) a request can stay in-flight before we give up and emit
-   * the canonical line as `outcome: 'timeout'`. Keeps a hung request
-   * from silently disappearing.
-   *
-   * Default: 30_000 (30s). Set to 0 to disable.
-   *
-   * Pick this above your slowest real requests (p99.9 + some headroom).
-   * Too low → you'll drop slow-but-valid requests.
-   * Too high → hung requests hold their slot longer.
+   * How long (ms) a request can stay in-flight before we emit `outcome: 'timeout'`.
+   * Set above your p99.9 with some headroom — too low drops slow-but-valid
+   * requests. Default: 30_000. Set to 0 to disable.
    */
   recordTtlMs?: number
 
   /**
-   * Max number of requests we track at once. When we hit this, extra
-   * requests are still served normally — we just skip the canonical line
-   * for them. Prevents runaway memory under load.
-   *
-   * Default: 5000. Set to 0 to disable.
+   * Max concurrent records. When full, extra requests skip the canonical
+   * line but are still served normally. Default: 5000. Set to 0 to disable.
    */
   maxActiveRecords?: number
 

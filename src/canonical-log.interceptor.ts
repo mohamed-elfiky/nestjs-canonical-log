@@ -27,9 +27,8 @@ export class CanonicalLogInterceptor implements NestInterceptor {
     const route = this.adapter.getRoutePath(req) ?? this.adapter.getRawPath(req)
     this.svc.addFields({ 'http.route': route })
 
-    // Track whether the observable errored. finalize() fires before the
-    // exception filter in NestJS's execution order, so we must NOT flush here
-    // on the error path — the filter enriches the record with error fields first.
+    // finalize() fires before the exception filter, so on the error path we
+    // skip flushing here and let the filter do it after enriching.
     let hasError = false
 
     return next.handle().pipe(
@@ -44,7 +43,7 @@ export class CanonicalLogInterceptor implements NestInterceptor {
           })
           this.svc.flush()
         }
-        // Error path: CanonicalLogExceptionFilter flushes after enriching.
+        // Error path: filter flushes.
       }),
     )
   }

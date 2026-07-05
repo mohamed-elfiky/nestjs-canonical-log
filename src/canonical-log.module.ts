@@ -61,9 +61,7 @@ export class CanonicalLogModule implements NestModule {
           provide: CANONICAL_HTTP_ADAPTER,
           useValue: options.adapter ?? new ExpressAdapter(),
         },
-        // If the consumer supplies a custom logger, wire it directly as a value.
-        // Otherwise use the factory so PinoLogger is resolved from the DI container
-        // (nestjs-pino must be set up by the consumer as a peer dep).
+        // Custom logger → use it directly. Otherwise resolve PinoLogger from DI.
         options.logger
           ? { provide: CANONICAL_LOGGER, useValue: options.logger }
           : {
