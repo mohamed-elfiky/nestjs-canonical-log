@@ -92,7 +92,7 @@ class JobsController {
   }
 }
 
-// Auth middleware that sets a kernel field. Lives in its own module so it
+// Auth middleware that sets a shared field. Lives in its own module so it
 // mounts AFTER ClsModule's middleware (which is required for cls.isActive()).
 // Root-module `configure()` runs before imported modules' middleware, so an
 // auth middleware in AppModule.configure() would see no CLS context.
@@ -114,7 +114,7 @@ class AuthModule implements NestModule {
 
 /**
  * Builds the sample module. `overrides` lets a test tweak CanonicalLogModule
- * options (e.g. bagTtlMs, maxActiveBags) without duplicating the module wiring.
+ * options (e.g. recordTtlMs, maxActiveRecords) without duplicating the module wiring.
  */
 function makeSampleModule(
   logger: ICanonicalLogger,
@@ -124,7 +124,7 @@ function makeSampleModule(
     imports: [
       ClsModule.forRoot({ global: true, middleware: { mount: true } }),
       CanonicalLogModule.forRoot({
-        service: 'test-service',
+        'service.name': 'test-service',
         logger,
         ...overrides,
       }),
@@ -176,7 +176,7 @@ describe('CanonicalLog — HTTP success path', () => {
     expect(logs[0]!['msg']).toBe('canonical')
   })
 
-  it('populates framework, kernel, and domain fields', async () => {
+  it('populates framework, shared, and domain fields', async () => {
     await request(app.getHttpServer()).get('/jobs/job_42').expect(200)
     const line = logs[0]!
     expect(line['service.name']).toBe('test-service')
@@ -317,14 +317,14 @@ describe('CanonicalLog — TTL timeout', () => {
     const { logs: l, logger } = makeCapturingLogger()
     logs = l
     // Short TTL so the test doesn't wait long.
-    app = await bootstrap(logger, { bagTtlMs: 50 })
+    app = await bootstrap(logger, { recordTtlMs: 50 })
   })
 
   afterEach(async () => {
     await app.close()
   })
 
-  it('emits outcome:timeout when the bag TTL expires without flush()', async () => {
+  it('emits outcome:timeout when the record TTL expires without flush()', async () => {
     // Bypass HTTP — drive the service directly inside a CLS context so
     // initialize() runs but flush() never does.
     const cls = app.get(ClsService)
@@ -351,7 +351,7 @@ describe('CanonicalLog — load shedding', () => {
     const { logs: l, logger } = makeCapturingLogger()
     logs = l
     // Cap at 1 — first request holds the slot; concurrent second request is shed.
-    app = await bootstrap(logger, { maxActiveBags: 1, bagTtlMs: 0 })
+    app = await bootstrap(logger, { maxActiveRecords: 1, recordTtlMs: 0 })
   })
 
   afterEach(async () => {
@@ -430,7 +430,7 @@ describe('CanonicalLog — internal field protection', () => {
     expect(logs).toHaveLength(1)
     const line = logs[0]!
     expect(line['user.field']).toBe('ok')
-    // The string-keyed attempts DO land in the bag as domain fields — this
+    // The string-keyed attempts DO land in the record as domain fields — this
     // proves they didn't hijack internal state (if they had, flush would have
     // been a no-op and logs would be empty).
     expect(line['__emitted']).toBe('attacker-set')
@@ -443,26 +443,17 @@ describe('CanonicalLog — internal field protection', () => {
 })
 
 describe('CanonicalLog — startup validation', () => {
-  it('throws when service option is missing/empty', () => {
-    expect(() =>
-      CanonicalLogModule.forRoot({ service: '' } as unknown as {
-        service: string
-      }),
-    ).not.toThrow() // module registration itself is lazy — Nest calls forRoot but the service is only constructed at bootstrap
-    // The real assertion happens at DI time; verified via bootstrap:
-  })
-
-  it('bootstrap fails when service is empty', async () => {
+  it('bootstrap fails when service.name is empty', async () => {
     const { logger } = makeCapturingLogger()
     @Module({
       imports: [
         ClsModule.forRoot({ global: true, middleware: { mount: true } }),
-        CanonicalLogModule.forRoot({ service: '', logger }),
+        CanonicalLogModule.forRoot({ 'service.name': '', logger }),
       ],
     })
     class BadModule { }
     await expect(
       NestFactory.create(BadModule, { logger: false, abortOnError: false }),
-    ).rejects.toThrow(/service.*required/i)
+    ).rejects.toThrow(/service\.name.*required/i)
   })
 })

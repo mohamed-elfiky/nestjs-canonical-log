@@ -4,10 +4,10 @@ export { ExpressAdapter, FastifyAdapter } from './canonical-log.adapter'
 export { PinoCanonicalLogger } from './canonical-log.logger'
 export type { CanonicalHttpAdapter } from './canonical-log.adapter'
 export type {
-  CanonicalBag,
-  CanonicalBagMeta,
+  CanonicalRecord,
+  CanonicalRecordMeta,
   CanonicalLogOptions,
-  DefaultKernelFields,
+  DefaultSharedFields,
   FrameworkFields,
   ICanonicalLogger,
 } from './canonical-log.types'

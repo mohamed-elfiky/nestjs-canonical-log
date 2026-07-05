@@ -28,7 +28,7 @@ export class CanonicalLogInterceptor implements NestInterceptor {
 
     // Track whether the observable errored. finalize() fires before the
     // exception filter in NestJS's execution order, so we must NOT flush here
-    // on the error path — the filter enriches the bag with error fields first.
+    // on the error path — the filter enriches the record with error fields first.
     let hasError = false
 
     return next.handle().pipe(

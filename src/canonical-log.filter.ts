@@ -5,7 +5,7 @@ import { CanonicalLogService } from './canonical-log.service'
 import { CANONICAL_HTTP_ADAPTER } from './canonical-log.types'
 
 /**
- * Enriches the canonical bag with error fields then emits the line.
+ * Enriches the canonical record with error fields then emits the line.
  *
  * Why extend BaseExceptionFilter instead of implementing ExceptionFilter directly:
  *
@@ -16,7 +16,7 @@ import { CANONICAL_HTTP_ADAPTER } from './canonical-log.types'
  * framework internals.
  *
  * By extending it, we get a clean two-step separation:
- *   1. Our catch() — observability only: enrich bag, flush canonical line.
+ *   1. Our catch() — observability only: enrich record, flush canonical line.
  *   2. super.catch() — response only: let NestJS send the HTTP error response.
  *
  * If we skipped super.catch(), the exception would be swallowed: no response

@@ -29,8 +29,8 @@ import { JobsModule } from './jobs/jobs.module'
     }),
 
     CanonicalLogModule.forRoot({
-      service: 'example-api',
-      env: process.env.NODE_ENV ?? 'development',
+      'service.name': 'example-api',
+      'deployment.environment': process.env.NODE_ENV ?? 'development',
     }),
 
     // AuthModule after the above — middleware in imported modules runs in

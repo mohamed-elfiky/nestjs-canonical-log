@@ -18,7 +18,7 @@ import {
   CANONICAL_LOG_OPTIONS,
   CANONICAL_LOGGER,
   type CanonicalLogOptions,
-  type DefaultKernelFields,
+  type DefaultSharedFields,
 } from './canonical-log.types'
 
 @Global()
@@ -27,8 +27,8 @@ export class CanonicalLogModule implements NestModule {
   /**
    * Register the canonical-log module globally.
    *
-   * The TKernel type parameter documents which kernel fields your app
-   * contributes. It defaults to DefaultKernelFields (tenant_id, actor_id).
+   * The TShared type parameter documents which shared fields your app
+   * contributes. It defaults to DefaultSharedFields (tenant_id, actor_id).
    * This is a compile-time hint only — it has no runtime effect.
    *
    * Prerequisites (must be set up in the host AppModule before this module):
@@ -38,13 +38,16 @@ export class CanonicalLogModule implements NestModule {
    *
    * @example
    * // Express (default)
-   * CanonicalLogModule.forRoot({ service: 'my-api', env: process.env.NODE_ENV })
+   * CanonicalLogModule.forRoot({
+   *   'service.name': 'my-api',
+   *   'deployment.environment': process.env.NODE_ENV,
+   * })
    *
    * // Fastify
    * import { FastifyAdapter } from 'nestjs-canonical-log'
-   * CanonicalLogModule.forRoot({ service: 'my-api', adapter: new FastifyAdapter() })
+   * CanonicalLogModule.forRoot({ 'service.name': 'my-api', adapter: new FastifyAdapter() })
    */
-  static forRoot<_TKernel = DefaultKernelFields>(
+  static forRoot<_TShared = DefaultSharedFields>(
     options: CanonicalLogOptions,
   ): DynamicModule {
     return {

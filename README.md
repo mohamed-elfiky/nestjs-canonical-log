@@ -55,7 +55,7 @@ This is the single most important property of the pattern and the hardest to get
 
 This is why Stripe wraps the entire request in a Ruby `ensure` block this is the canonical equivalent of `finally`. A line that only emits on success is useless for the one case where you need it most: the 3am incident where the request died mid-flight and you need to know exactly where and why.
 
-This implementation achieves failure-correctness through a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if the two paths ever overlap the second call is a safe no-op. The flag that enforces exactly-once lives in the per-request CLS bag, not in the callers, so no coordination is needed.
+This implementation achieves failure-correctness through a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if the two paths ever overlap the second call is a safe no-op. The flag that enforces exactly-once lives in the per-request CLS record, not in the callers, so no coordination is needed.
 
 ### Sparseness is signal
 
@@ -78,7 +78,7 @@ Random logs rot. Engineers change strings, rename keys, drop fields — and noth
 This is why:
 
 - **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
-- **Kernel fields** (`tenant_id`, `actor_id`, `actor_type`) are cross-cutting and owned by the auth layer. One place, one team, one contract.
+- **Shared fields** (`tenant_id`, `actor_id`, `actor_type`) are cross-cutting and owned by the auth layer. One place, one team, one contract.
 - **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
 - **Field names follow OTEL semantic conventions where practical.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. A few fields — `duration_ms` (OTEL uses `duration` in nanoseconds; we use ms for human readability) and `outcome` (custom, not in OTEL) — deviate deliberately. Most fields port cleanly if you migrate from logs to spans; those two would need renaming.
 
@@ -153,7 +153,7 @@ Request
   │
   ▼
 ┌─────────────────────────────┐
-│  CanonicalLogMiddleware      │  initialize() — create bag in CLS, start clock,
+│  CanonicalLogMiddleware      │  initialize() — create record in CLS, start clock,
 │                              │  seed service.name / http.request.method / http.route (raw)
 └──────────────┬──────────────┘
                │
@@ -184,7 +184,7 @@ Request
                 └──────────────────────────┘
 ```
 
-**Key invariant:** `flush()` is idempotent — whichever path fires first, the line emits once. The flag lives in the CLS bag, not in the callers, so there is no coordination needed between interceptor and filter.
+**Key invariant:** `flush()` is idempotent — whichever path fires first, the line emits once. The flag lives in the CLS record, not in the callers, so there is no coordination needed between interceptor and filter.
 
 **Why finalize() skips flush() on error:** In NestJS, RxJS `finalize()` fires *before* the exception filter (finalize is observable teardown; the filter is called after the subscription settles). If finalize flushed unconditionally, the line would emit without error fields. The interceptor tracks `hasError` via `tap({ error })` and skips flush on the error path, leaving it to the filter.
 
@@ -226,15 +226,15 @@ import { CanonicalLogModule } from 'nestjs-canonical-log'
 
     // 3. Canonical log — one line, globally wired
     CanonicalLogModule.forRoot({
-      service: 'my-api',
-      env: process.env.NODE_ENV,
+      'service.name': 'my-api',
+      'deployment.environment': process.env.NODE_ENV,
     }),
   ],
 })
 export class AppModule {}
 ```
 
-### 2. Wire identity (kernel fields)
+### 2. Wire identity (shared fields)
 
 Inject `CanonicalLogService` wherever you resolve the authenticated user and call `addFields`:
 
@@ -298,7 +298,7 @@ export class JobsService {
 import { FastifyAdapter } from 'nestjs-canonical-log'
 
 CanonicalLogModule.forRoot({
-  service: 'my-api',
+  'service.name': 'my-api',
   adapter: new FastifyAdapter(),
 })
 ```
@@ -329,10 +329,16 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)    |
 | `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)     |
 | `error.message`             | error attrs   | filter                   | exception message (contextual — no stack; use an error tracker for that) |
-| `tenant_id`                 | —             | caller (auth layer)      | kernel field, optional                         |
-| `actor_id`                  | —             | caller (auth layer)      | kernel field, optional                         |
-| `actor_type`                | —             | caller (auth layer)      | kernel field, optional                         |
+| `tenant_id`                 | —             | caller (auth layer)      | shared field, optional                         |
+| `actor_id`                  | —             | caller (auth layer)      | shared field, optional                         |
+| `actor_type`                | —             | caller (auth layer)      | shared field, optional                         |
 | `*.*`                       | —             | caller (domain services) | namespaced, sparse, typed locally              |
+
+---
+
+## Limitations
+
+- **HTTP requests only.** Background jobs (BullMQ, cron, queue workers) are not wired. The `POST → worker → status poll` pattern gives you canonical lines for the HTTP hops but not for the background work in between.
 
 ---
 

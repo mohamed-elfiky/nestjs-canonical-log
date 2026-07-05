@@ -1,245 +1,165 @@
 import type { CanonicalHttpAdapter } from './canonical-log.adapter'
 
 // ---------------------------------------------------------------------------
-// Framework fields — set by the canonical-log mechanism, never by callers.
-// Names follow OTEL semantic conventions so fields port directly to spans
-// if you switch from log-based to trace-based observability in the future.
-// Ref: https://opentelemetry.io/docs/specs/semconv/http/http-spans/
+// Framework fields — set by the library, don't override.
 // ---------------------------------------------------------------------------
 export interface FrameworkFields {
-  /** ISO-8601 timestamp captured at the moment the request arrived. */
+  /** When the request came in. ISO-8601. */
   timestamp: string
 
-  /**
-   * Logical name of the service emitting the log.
-   */
+  /** Name of your service. */
   'service.name': string
 
-  /**
-   * Runtime environment label (e.g. "prod", "staging", "dev").
-   */
+  /** Which environment this is running in (prod, staging, dev). */
   'deployment.environment'?: string
 
-  /**
-   * HTTP verb in uppercase (e.g. "GET", "POST", "PATCH").
-   */
+  /** GET, POST, PATCH, etc. */
   'http.request.method': string
 
   /**
-   * Parameterized route template, not the actual URL.
-   * e.g. "/v1/jobs/:id" not "/v1/jobs/abc123".
-   * Seeded with the raw path by middleware; overwritten with the template
-   * by the interceptor once NestJS has resolved the handler.
+   * The route template, not the actual URL.
+   * e.g. "/v1/jobs/:id" — not "/v1/jobs/abc123".
    */
   'http.route': string
 
-  /**
-   * HTTP response status code (e.g. 200, 404, 500).
-   */
+  /** 200, 404, 500, etc. */
   'http.response.status_code'?: number
 
-  /** Monotonic clock. Milliseconds from request arrival to response (or error). */
+  /** How long the request took, in milliseconds. */
   duration_ms?: number
 
   /**
-   * Coarse outcome of the request.
-   * "ok"      — handler completed and a non-5xx response was sent.
-   * "error"   — an exception was thrown (guard, pipe, controller, or filter).
-   * "timeout" — the bag's TTL expired without flush() being called; the line
-   *             is emitted with whatever fields accumulated so far so leaked
-   *             requests remain queryable.
+   * How the request ended.
+   *  - "ok"      — handled cleanly
+   *  - "error"   — something threw
+   *  - "timeout" — the request took longer than the TTL and we emitted
+   *                the line anyway so leaked requests stay visible
    */
   outcome?: 'ok' | 'error' | 'timeout'
 
-  /**
-   * The exception / error type name, e.g. "NotFoundException", "QueryTimeoutError".
-   * Only present when outcome is "error".
-   */
+  /** The exception class name (e.g. "QueryTimeoutError"). Only on errors. */
   'error.type'?: string
 
-  /**
-   * The exception message string.
-   * Only present when outcome is "error".
-   */
+  /** The exception message. Only on errors. */
   'error.message'?: string
 }
 
 // ---------------------------------------------------------------------------
-// Kernel fields — shared identity present on (nearly) every request.
+// Shared fields — identity that shows up on (almost) every request.
 // ---------------------------------------------------------------------------
-export interface DefaultKernelFields {
-  /**
-   * The resolved tenant / account identifier for this request.
-   * Optional: health checks, public webhooks, and auth failures
-   * legitimately have no tenant.
-   */
+export interface DefaultSharedFields {
+  /** Which tenant/account this request belongs to. */
   tenant_id?: string
 
-  /**
-   * The resolved user / service-account identifier for this request.
-   * Optional for the same reasons as tenant_id.
-   */
+  /** Which user or service account made the request. */
   actor_id?: string
 
-  /**
-   * The category of principal making the request.
-   * e.g. "human" (end-user session), "api_key" (programmatic), "service" (internal).
-   * Optional for the same reasons as tenant_id.
-   */
+  /** What kind of principal made the request (human, api_key, service). */
   actor_type?: string
 }
 
 // ---------------------------------------------------------------------------
-// Module options
+// Module options — passed to CanonicalLogModule.forRoot({...}).
 // ---------------------------------------------------------------------------
 export interface CanonicalLogOptions {
-  /**
-   * Logical name of the service (e.g. "payments-api").
-   * Emitted as "service.name" following OTEL conventions.
-   */
-  service: string
+  /** Name of your service. Same key you'll search for in your logs. */
+  'service.name': string
+
+  /** Environment name (prod, staging, dev). Optional. */
+  'deployment.environment'?: string
 
   /**
-   * Runtime environment label (e.g. "prod", "staging").
-   * Emitted as "deployment.environment" following OTEL conventions.
-   */
-  env?: string
-
-  /**
-   * Custom logger implementation. Defaults to PinoCanonicalLogger (nestjs-pino).
-   * Provide this to use a different sink (Winston, console, custom pipeline)
-   * without changing anything else.
-   *
-   * @example
-   * class MyLogger implements ICanonicalLogger {
-   *   info(fields: Record<string, unknown>, message: string) {
-   *     winston.info(message, fields)
-   *   }
-   * }
-   * CanonicalLogModule.forRoot({ service: 'my-api', logger: new MyLogger() })
+   * Your own logger. Defaults to nestjs-pino.
+   * Implement ICanonicalLogger if you want to swap sinks (Winston, console, etc).
    */
   logger?: ICanonicalLogger
 
   /**
-   * TTL in milliseconds for a bag in the CLS store.
-   * If flush() is never called (hung request, uncaught exception outside
-   * NestJS's filter chain), the bag is automatically evicted after this
-   * duration and the activeBags counter is decremented.
-   * Default: 30_000 (30 seconds). Set to 0 to disable.
+   * How long (ms) a request can stay in-flight before we give up and emit
+   * the canonical line as `outcome: 'timeout'`. Keeps a hung request
+   * from silently disappearing.
    *
-   * How to pick this number:
-   * Set it above your p99.9 request latency — the slowest 1-in-1000 request
-   * you see in production — plus ~50% headroom. This ensures legitimately
-   * slow requests complete and flush() normally before the TTL fires.
-   * Setting it too low evicts slow-but-valid requests and silently drops
-   * their canonical lines. Setting it too high increases how long a leaked
-   * bag holds its slot in the store before being reclaimed.
+   * Default: 30_000 (30s). Set to 0 to disable.
    *
-   * To find your p99.9: query your APM or existing request logs for the
-   * maximum `duration_ms` (or pino-http's `responseTime`) over the last
-   * 30 days. Add 50% headroom. Example: worst request = 8s → set 12_000.
+   * Pick this above your slowest real requests (p99.9 + some headroom).
+   * Too low → you'll drop slow-but-valid requests.
+   * Too high → hung requests hold their slot longer.
    */
-  bagTtlMs?: number
+  recordTtlMs?: number
 
   /**
-   * Hard cap on the number of concurrent active bags in the CLS store.
-   * When this limit is reached, new requests are shed: initialize() skips
-   * bag creation, addFields() and flush() become no-ops for that request.
-   * The request itself is completely unaffected — only the canonical line
-   * is lost. Prevents the CLS store from growing unboundedly under load.
+   * Max number of requests we track at once. When we hit this, extra
+   * requests are still served normally — we just skip the canonical line
+   * for them. Prevents runaway memory under load.
    *
    * Default: 5000. Set to 0 to disable.
    */
-  maxActiveBags?: number
+  maxActiveRecords?: number
 
   /**
-   * HTTP adapter for platform-specific request inspection.
-   * Defaults to ExpressAdapter. Pass FastifyAdapter when using
-   * @nestjs/platform-fastify, or implement CanonicalHttpAdapter for custom platforms.
-   *
-   * @example
-   * import { FastifyAdapter } from 'nestjs-canonical-log'
-   * CanonicalLogModule.forRoot({ service: 'my-api', adapter: new FastifyAdapter() })
+   * HTTP adapter. Defaults to Express. Use FastifyAdapter for Fastify, or
+   * write your own by implementing CanonicalHttpAdapter.
    */
   adapter?: CanonicalHttpAdapter
 }
 
 // ---------------------------------------------------------------------------
-// Internal bag — stored in CLS per request.
+// Internal — the record that holds fields during a request's lifetime.
 // ---------------------------------------------------------------------------
 
-/** CLS store key for the canonical bag. Prefixed to avoid collisions with other CLS users. */
-export const CANONICAL_LOG_BAG_KEY = '__nestjs_canonical_log__'
+/** Where in CLS we store the record. */
+export const CANONICAL_LOG_RECORD_KEY: unique symbol = Symbol('canonical.record')
 
-/** CLS store key marking a request as shed (store at capacity when it arrived). */
-export const CANONICAL_LOG_SHED_KEY = '__nestjs_canonical_log_shed__'
+/** Marker in CLS meaning "we skipped this request because we were at capacity." */
+export const CANONICAL_LOG_SHED_KEY: unique symbol = Symbol('canonical.shed')
 
-// Symbol keys for internal bag state.
-// Keeping these unexported at the package level means callers physically cannot
-// obtain them via `addFields()` — Object.assign copies own symbol keys, but the
-// caller has no reference to construct one. Symbols are also excluded from
-// JSON.stringify, so they naturally drop out of the emitted log line.
+// Symbol keys for internal record state. Unexported at the package level so
+// callers can't overwrite them via addFields(). Symbols are also skipped by
+// JSON.stringify, so they naturally don't show up in the emitted line.
 export const EMITTED: unique symbol = Symbol('canonical.emitted')
 export const STARTED_AT: unique symbol = Symbol('canonical.startedAt')
 export const TTL_TIMER: unique symbol = Symbol('canonical.ttlTimer')
 
-/** DI token for CanonicalLogOptions registered via forRoot(). */
+/** DI token for the options object. */
 export const CANONICAL_LOG_OPTIONS = Symbol('CANONICAL_LOG_OPTIONS')
 
-/** DI token for the CanonicalHttpAdapter registered via forRoot(). */
+/** DI token for the HTTP adapter. */
 export const CANONICAL_HTTP_ADAPTER = Symbol('CANONICAL_HTTP_ADAPTER')
 
 /**
- * Minimal logger interface the service depends on.
- * Decouples the service from nestjs-pino — any logger that implements
- * this can be used. The default implementation is PinoCanonicalLogger.
+ * What the library needs from a logger. Two args, one method — that's it.
+ * Pass your own to forRoot({ logger }) to plug in a different sink.
  */
 export interface ICanonicalLogger {
   info(fields: Record<string, unknown>, message: string): void
 }
 
-/** DI token for the ICanonicalLogger registered by the module. */
+/** DI token for the logger. */
 export const CANONICAL_LOGGER = Symbol('CANONICAL_LOGGER')
 
 /**
- * Internal tracking fields carried alongside user-visible fields in the CLS bag.
- *
- * These live under module-private Symbol keys (EMITTED, STARTED_AT, TTL_TIMER)
- * for two reasons:
- *  - Callers cannot accidentally overwrite them via addFields() because they
- *    have no reference to the symbols.
- *  - Symbol-keyed properties are excluded from JSON.stringify, so they drop out
- *    of the emitted canonical line without any destructure-and-strip dance.
+ * Internal bookkeeping fields. Kept on the record under Symbol keys so callers
+ * can't touch them and they don't leak into the emitted JSON.
  */
-export interface CanonicalBagMeta {
-  /** True once flush() has fired. Prevents the line from being emitted twice. */
+export interface CanonicalRecordMeta {
+  /** True after flush() runs. Keeps the line from being emitted twice. */
   [EMITTED]: boolean
 
-  /** Start time from process.hrtime.bigint(), used to compute duration_ms. */
+  /** When the request started (hrtime), used to compute duration_ms. */
   [STARTED_AT]: bigint
 
   /**
-   * TTL timer handle. Set in initialize(), cancelled in flush().
-   * If flush() never fires, the timer emits a canonical line with
-   * outcome:'timeout' and decrements activeBags to prevent counter leak.
-   * The timer callback uses a closure reference to the bag — NOT getCls() —
-   * because it fires outside the original async context.
+   * TTL timer. Cancelled in flush(). If it fires first, it emits the line
+   * with outcome:'timeout' and frees the counter slot.
    */
   [TTL_TIMER]: ReturnType<typeof setTimeout> | undefined
 }
 
 /**
- * The in-flight bag living in CLS for the duration of one HTTP request.
- *
- * Framework and kernel fields are typed; domain fields are an open record.
- * Modules contribute typed partials via addFields<T>() — their local type
- * provides call-site safety, but the bag itself cannot enumerate every
- * domain namespace statically (that would couple it to all modules).
- *
- * Sparseness is intentional: a failed request will have gaps (e.g. no
- * "job.status_to" if the write never completed). Those gaps are signal.
+ * The record itself: framework + shared + your domain fields + internal state.
+ * Domain fields are open — type them locally at the call site via addFields<T>().
  */
-export type CanonicalBag = Partial<FrameworkFields> &
-  Partial<DefaultKernelFields> &
-  CanonicalBagMeta &
+export type CanonicalRecord = Partial<FrameworkFields> &
+  Partial<DefaultSharedFields> &
+  CanonicalRecordMeta &
   Record<string, unknown>
