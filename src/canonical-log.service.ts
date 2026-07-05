@@ -39,7 +39,7 @@ export class CanonicalLogService {
   }
 
   /**
-   * Merge arbitrary fields into the current request's canonical record.
+   * Add fields to the current request's canonical record.
    *
    * Call this from any service, guard, or interceptor to contribute
    * domain-specific fields. Use a locally-defined type as the type
@@ -55,9 +55,8 @@ export class CanonicalLogService {
    * No-op if this request was shed (store was at capacity when it arrived).
    */
   addFields<T extends object>(fields: T): void {
-    // No CLS context = nothing we can persist to. 
-    // this happens for non-HTTP code paths and for
-    // exceptions that escape before any middleware runs.
+    // No CLS context — nothing to persist to. Happens for non-HTTP code paths
+    // and for exceptions that escape before any middleware runs.
     if (!this.cls.isActive()) return
 
     // Once a request is marked shed by initialize(), stay shed for the entire
@@ -65,11 +64,10 @@ export class CanonicalLogService {
     // wrong __startedAt/timestamp if the store drops below cap in the meantime.
     if (this.cls.get(CANONICAL_LOG_SHED_KEY)) return
 
-    // Lazily create the record if it doesn't exist yet. This makes addFields()
-    // tolerant of middleware ordering: a caller that runs before
-    // CanonicalLogMiddleware (e.g. an auth middleware registered in
-    // AppModule.configure(), which NestJS mounts before imported modules'
-    // middleware) still contributes fields to the canonical line.
+    // Lazily create the record if it doesn't exist yet. This way addFields()
+    // works even if it runs before CanonicalLogMiddleware — e.g. an auth
+    // middleware registered in AppModule.configure(), which NestJS mounts
+    // before imported modules' middleware.
     let record = this.getRecord()
     if (!record) {
       this.initialize()
@@ -96,9 +94,8 @@ export class CanonicalLogService {
    * canonical line with outcome:'timeout' and frees the counter slot.
    */
   initialize(): void {
-    // If a record already exists in CLS (e.g. addFields() lazily
-    // created one because it was called before this middleware ran), do
-    // nothing. \
+    // If a record already exists (e.g. addFields() lazily created one before
+    // this middleware ran), do nothing.
     if (this.getRecord()) return
 
     if (this.maxActiveRecords > 0 && this.activeRecords >= this.maxActiveRecords) {
@@ -168,7 +165,7 @@ export class CanonicalLogService {
     this.emit(record)
   }
 
-  /** Nanosecond-precision wall-clock ms since initialize(). */
+  /** Monotonic clock in ms since the request started. */
   elapsedMs(): number | undefined {
     const record = this.getRecord()
     if (!record) return undefined

@@ -1,7 +1,7 @@
 import type { CanonicalHttpAdapter } from './canonical-log.adapter'
 
 // ---------------------------------------------------------------------------
-// Framework fields — set by the library, don't override.
+// Framework fields. Set by the library, don't override.
 // ---------------------------------------------------------------------------
 export interface FrameworkFields {
   /** When the request came in. ISO-8601. */
@@ -33,7 +33,7 @@ export interface FrameworkFields {
    *  - "ok"      — handled cleanly
    *  - "error"   — something threw
    *  - "timeout" — the request took longer than the TTL and we emitted
-   *                the line anyway so leaked requests stay visible
+   *                the line anyway so hung requests stay visible
    */
   outcome?: 'ok' | 'error' | 'timeout'
 
@@ -45,7 +45,7 @@ export interface FrameworkFields {
 }
 
 // ---------------------------------------------------------------------------
-// Shared fields — identity that shows up on (almost) every request.
+// Shared fields — concerns that show up on (almost) every request.
 // ---------------------------------------------------------------------------
 export interface DefaultSharedFields {
   /** Which tenant/account this request belongs to. */

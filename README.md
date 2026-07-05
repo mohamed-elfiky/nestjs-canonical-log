@@ -78,7 +78,7 @@ Random logs rot. Engineers change strings, rename keys, drop fields — and noth
 This is why:
 
 - **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
-- **Shared fields** (`tenant_id`, `actor_id`, `actor_type`) are cross-cutting and owned by the auth layer. One place, one team, one contract.
+- **Shared fields** (`tenant_id`, `actor_id`, `actor_type`) show up on every request and are owned by the auth layer. One place, one team, one contract.
 - **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
 - **Field names follow OTEL semantic conventions where practical.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. A few fields — `duration_ms` (OTEL uses `duration` in nanoseconds; we use ms for human readability) and `outcome` (custom, not in OTEL) — deviate deliberately. Most fields port cleanly if you migrate from logs to spans; those two would need renaming.
 
@@ -218,13 +218,13 @@ import { CanonicalLogModule } from 'nestjs-canonical-log'
 
 @Module({
   imports: [
-    // 1. CLS — must come first so the scope opens before our middleware runs
+    // 1. CLS must come first so the scope opens before our middleware runs
     ClsModule.forRoot({ global: true, middleware: { mount: true } }),
 
-    // 2. nestjs-pino — canonical line emits through PinoLogger
+    // 2. Logger of your of your choice by default we use nestjs 
     LoggerModule.forRoot({ pinoHttp: { level: 'info' } }),
 
-    // 3. Canonical log — one line, globally wired
+    // 3. Canonical log
     CanonicalLogModule.forRoot({
       'service.name': 'my-api',
       'deployment.environment': process.env.NODE_ENV,
@@ -317,22 +317,22 @@ Correlation IDs should be injected automatically by your instrumentation library
 
 Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) so they port directly to spans if you later adopt distributed tracing.
 
-| Field                       | OTEL ref      | Set by                   | Notes                                          |
-| --------------------------- | ------------- | ------------------------ | ---------------------------------------------- |
-| `service.name`              | resource attr | module init              | from `forRoot({ service })`                    |
-| `deployment.environment`    | resource attr | module init              | from `forRoot({ env })`                        |
-| `timestamp`                 | —             | middleware               | ISO-8601, request arrival                      |
-| `http.request.method`       | http spans    | middleware               | uppercase verb                                 |
-| `http.route`                | http spans    | interceptor              | parameterized template, e.g. `/v1/jobs/:id`    |
-| `http.response.status_code` | http spans    | interceptor / filter     |                                                |
-| `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable |
-| `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)    |
-| `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)     |
+| Field                       | OTEL ref      | Set by                   | Notes                                                                    |
+| --------------------------- | ------------- | ------------------------ | ------------------------------------------------------------------------ |
+| `service.name`              | resource attr | module init              | from `forRoot({ service })`                                              |
+| `deployment.environment`    | resource attr | module init              | from `forRoot({ env })`                                                  |
+| `timestamp`                 | —             | middleware               | ISO-8601, request arrival                                                |
+| `http.request.method`       | http spans    | middleware               | uppercase verb                                                           |
+| `http.route`                | http spans    | interceptor              | parameterized template, e.g. `/v1/jobs/:id`                              |
+| `http.response.status_code` | http spans    | interceptor / filter     |                                                                          |
+| `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable                           |
+| `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)                              |
+| `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)                               |
 | `error.message`             | error attrs   | filter                   | exception message (contextual — no stack; use an error tracker for that) |
-| `tenant_id`                 | —             | caller (auth layer)      | shared field, optional                         |
-| `actor_id`                  | —             | caller (auth layer)      | shared field, optional                         |
-| `actor_type`                | —             | caller (auth layer)      | shared field, optional                         |
-| `*.*`                       | —             | caller (domain services) | namespaced, sparse, typed locally              |
+| `tenant_id`                 | —             | caller (auth layer)      | shared field, optional                                                   |
+| `actor_id`                  | —             | caller (auth layer)      | shared field, optional                                                   |
+| `actor_type`                | —             | caller (auth layer)      | shared field, optional                                                   |
+| `*.*`                       | —             | caller (domain services) | namespaced, sparse, typed locally                                        |
 
 ---
 

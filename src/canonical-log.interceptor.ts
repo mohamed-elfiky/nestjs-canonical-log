@@ -15,14 +15,15 @@ export class CanonicalLogInterceptor implements NestInterceptor {
   constructor(
     private readonly svc: CanonicalLogService,
     @Inject(CANONICAL_HTTP_ADAPTER) private readonly adapter: CanonicalHttpAdapter,
-  ) {}
+  ) { }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') return next.handle()
 
     const req = context.switchToHttp().getRequest<unknown>()
-    // Overwrite the raw path seeded by middleware with the parameterized route
-    // template now that NestJS has resolved the handler.
+    // The raw path from middleware (e.g. "/users/123") is high-cardinality —
+    // useless as a query dimension. Now that the handler has resolved,
+    // overwrite with the parameterized template (e.g. "/users/:id").
     const route = this.adapter.getRoutePath(req) ?? this.adapter.getRawPath(req)
     this.svc.addFields({ 'http.route': route })
 

@@ -29,12 +29,11 @@ export class CanonicalLogModule implements NestModule {
    *
    * The TShared type parameter documents which shared fields your app
    * contributes. It defaults to DefaultSharedFields (tenant_id, actor_id).
-   * This is a compile-time hint only — it has no runtime effect.
    *
    * Prerequisites (must be set up in the host AppModule before this module):
    *  - ClsModule.forRoot({ global: true, middleware: { mount: true } })
-   *  - LoggerModule.forRoot(...) from nestjs-pino
-   *  - dd-trace with logInjection: true for Datadog trace correlation (optional)
+   *  - LoggerModule.forRoot(...) for your chosen logger (nestjs-pino, Winston, etc)
+   *  - Recommended: Use auto-instrumentation to inject correlation IDs into your logs (e.g. OpenTelemetry, Datadog, etc)
    *
    * @example
    * // Express (default)
@@ -68,10 +67,10 @@ export class CanonicalLogModule implements NestModule {
         options.logger
           ? { provide: CANONICAL_LOGGER, useValue: options.logger }
           : {
-              provide: CANONICAL_LOGGER,
-              useFactory: (pino: PinoLogger) => new PinoCanonicalLogger(pino),
-              inject: [PinoLogger],
-            },
+            provide: CANONICAL_LOGGER,
+            useFactory: (pino: PinoLogger) => new PinoCanonicalLogger(pino),
+            inject: [PinoLogger],
+          },
         CanonicalLogService,
         {
           provide: APP_INTERCEPTOR,
