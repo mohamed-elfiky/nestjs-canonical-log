@@ -4,3 +4,5 @@ dist
 *.log
 .DS_Store
 resources.md
+benchmarks/.flamegraph
+coverage
