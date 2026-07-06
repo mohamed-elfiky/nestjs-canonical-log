@@ -2,7 +2,7 @@
 
 One structured log line per HTTP request following the [Stripe canonical log line pattern](https://stripe.com/blog/canonical-log-lines).
 
-> **See it running:** [`example/`](./example/README.md), a minimal NestJS app with auth + a jobs domain, walking through what the canonical line looks like for success, state transitions, controller errors, and validation errors.
+> **See it running:** [`example/`](./example/README.md), a runnable Nest app covering success, state transitions, and errors.
 
 ---
 
@@ -23,23 +23,18 @@ INFO  Returning 200
 
 The problems:
 
-- **You can't query it.** "How many jobs were updated by tenant X in the last hour, and what was the p99 latency?" requires parsing free-text across millions of lines.
-- **It breaks on failure.** The exception bubbles before the "returning 200" line emits. You get half a trail and have to infer the rest.
-- **Volume without density.** Six lines, one request, none of them individually answerable. You need all six to reconstruct what happened, and they're interleaved with every other concurrent request. Even with tracing, you're still reconstructing state from six partial lines instead of reading one.
-- **It's random.** Every engineer decides independently what to log, when, and with what fields. There is no contract.
-- **Structured isn't enough.** Structured logs alone don't fix this. In a large org, you can't reliably get every team to design their logs with observability in mind. Canonical logs shift the mindset: the log line becomes part of the design step, not an afterthought.
+- **You can't query it.** "How many jobs did tenant X update in the last hour at what p99?" needs free-text parsing across millions of lines.
+- **It breaks on failure.** The exception bubbles before "returning 200". Half a trail, infer the rest.
+- **Volume without density.** Six lines, one request, none individually answerable. Interleaved with every other concurrent request.
+- **It's random.** No contract. Every engineer picks their own fields.
 
-### What observability actually means
+### The idea
 
-Observability, properly defined, is the ability to ask arbitrary questions about your system's behavior from the outside, without shipping new code to answer them. The key word is **arbitrary**: you don't know in advance what questions an incident will require.
+Observability is asking arbitrary questions about system behavior without shipping new code. Canonical logs implement that for request-scoped systems:
 
-The canonical log pattern is the practical implementation of this for request-scoped systems. The insight is simple:
+> **One request = one event. Emit it once at the end.**
 
-> **One request = one event. The event is the unit of observability.**
-
-Instead of emitting breadcrumbs as the request progresses, you accumulate facts into a single structured record and emit it exactly once at the end. Either success or failure. That record is your event. It is flat, dense, and queryable.
-
-Now "how many jobs were updated by tenant X in the last hour, p99 latency?" is a single Datadog query:
+Now the tenant-X question is one query:
 
 ```
 service.name:my-api http.route:/v1/jobs/:id/status outcome:ok tenant_id:acct_8f2c
@@ -49,17 +44,13 @@ Group by `tenant_id`, percentile on `duration_ms`. Done.
 
 ### Errors must still emit a line
 
-The hardest part of the pattern to get right.
+The hardest part to get right. The line must emit on failure, with full error detail. Always.
 
-**The line must emit on failure, with full error detail.** Not "usually". Not "unless it's a 500". Always.
-
-This is why Stripe wraps the entire request in a Ruby `ensure` block this is the canonical equivalent of `finally`. A line that only emits on success is useless for the one case where you need it most: the 3am incident where the request died mid-flight and you need to know exactly where and why.
-
-This library handles this through a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if the two paths ever overlap the second call is a safe no-op. The flag that enforces exactly-once lives in the per-request CLS record, not in the callers, so no coordination is needed.
+This library handles that with a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if both fire the second is a safe no-op.
 
 ### The `stage` field tells you where it broke
 
-Every canonical line carries a `stage` field. Set it as work progresses. The value at emit time tells anyone reading the line where the request was when it stopped, without needing to know the handler code.
+Every canonical line carries a `stage` field. Update it as work progresses. The value at emit time tells anyone reading the line where the request stopped, no handler knowledge required.
 
 ```typescript
 type JobStage = 'fetching_job' | 'writing_status' | 'notifying' | 'done'
@@ -70,40 +61,29 @@ const job = await db.getJob(id)
 canonicalLog.stage<JobStage>('writing_status')
 await db.updateStatus(job.id, newStatus)
 
-canonicalLog.stage<JobStage>('notifying')
-await queue.enqueue({ jobId: job.id })
-
 canonicalLog.stage<JobStage>('done')
 ```
 
-If the DB write throws, the emitted line has `stage: "writing_status"`. Group by `stage` where `outcome:error` to see which stages fail most often across your app. That's a first-class debugging query no matter who wrote the handler.
+If the DB write throws, the line has `stage: "writing_status"`. Group by `stage` where `outcome:error` shows which stages fail most.
 
-**Enforce a stage enum at compile time.** Define a local union type per handler and pass it as the type argument. TypeScript catches typos and prevents high-cardinality drift ("fetching-job" vs "fetching_job" vs "Fetching Job"). If you don't set a stage, the terminal value is `request_started`, which is honest: "no stage was tracked."
-
-Domain fields (`job.status_from`, `job.status_to`) can still be set incrementally as a secondary signal. The `status_to` being absent under `stage: "writing_status"` reinforces "the write didn't complete." But `stage` is what makes the log self-describing.
+Pass a local union type as the generic to enforce a stage enum at compile time (prevents typos and cardinality drift). If you never set a stage, the terminal value is `request_started`.
 
 ### Fields are part of your API
 
-Random logs rot. Engineers change strings, rename keys, drop fields, and nothing breaks at compile time. Canonical fields are different: they are the queryable API of your observability system. Dashboards, alerts, and SLO monitors are built on them. Breaking a field name breaks an alert.
+Random logs rot. Canonical fields are the queryable API your dashboards and alerts depend on. Break a field name, break an alert.
 
-This is why:
-
-- **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
-- **Shared fields** (`tenant_id`, `actor_id`, `actor_type`) show up on every request and are owned by the auth layer. One place, one team, one contract.
-- **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
-- **Field names follow OTEL semantic conventions where practical.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. A few fields deviate deliberately: `duration_ms` (OTEL uses `duration` in nanoseconds; we use ms for human readability) and `outcome` (custom, not in OTEL). Most fields port cleanly if you migrate from logs to spans; those two would need renaming.
+- **Framework fields** (`http.route`, `http.response.status_code`, etc.): set by the library, never by application code.
+- **Shared fields** (`tenant_id`, `actor_id`, `actor_type`): cross-cutting, owned by the auth layer.
+- **Domain fields** (`job.id`, `billing.invoice_id`): namespaced, typed locally at the call site.
+- **Names follow OTEL** where practical, so migrating to spans is mostly a config change. Deviations: `duration_ms` (OTEL uses ns; ms is readable) and `outcome` (custom).
 
 ### Why logs, not spans
 
-Distributed tracing spans are the richer primitive: they carry timing, parent-child relationships across services, and arbitrary attributes. The canonical log line is a deliberate downgrade of that richness in exchange for cost.
+Spans are the richer primitive but expensive at scale. **Cardinality is the driver.** One request produces many spans (handler + one per DB query + one per outbound call). At 1,000 req/s that's 10,000+ spans/s. APM vendors price per-host + per-indexed-span. Log management prices per GB + per event. A canonical line is exactly one event per request. That's the 10x reduction.
 
-The cost gap comes from cardinality, not just pricing model. One HTTP request typically produces many spans: the handler, one per DB query, one per outbound HTTP call, one per cache lookup. A service doing 1,000 req/s can easily be indexing 10,000+ spans per second. APM vendors (Datadog, New Relic, Honeycomb, Dynatrace, and open-source stacks with paid backends) typically combine a per-host or per-service fee with per-indexed-span pricing, so that volume adds up quickly at scale. Log management is usually priced per GB ingested plus per indexed event, and a canonical line is exactly one event per request, no matter how many internal calls it made. That difference in event count is where the cost gap lives, and it's real: at 1,000 req/s, one canonical event per request against ten spans per request is a 10x reduction in the metered dimension.
+**"Why not one wide span per request instead?"** Sampling. APM vendors drop 90-99% of successful traces at ingest to control cost, head-based or tail-based. That means "what happened to *this* request?" often can't be answered because the span wasn't kept. Log management doesn't sample by default, so canonical logs give you 100% coverage. That's the real differentiator, not just cheaper storage.
 
-A related counter-argument you'll hear: "why not one wide span per request instead of a canonical log line? Same schema, still in the tracing store." The answer is sampling. Every APM at scale samples successful traces aggressively (often 1% or less) to control cost. Head-based sampling drops at ingest; tail-based sampling keeps errors and slow requests but still drops the rest. That means "what happened to this exact request from tenant acct_8f2c at 3:42 PM?" often can't be answered because the span wasn't kept. Log management doesn't sample by default. Canonical logs at log-management pricing give you 100% coverage of every request, and that's the actual differentiator, not just cheaper storage. Wide-event backends like Honeycomb work philosophically the same way but hit the same cost wall at high volume, and their customers sample too.
-
-You lose things, though. No distributed call graph across services, no waterfall view of internal calls, no auto-instrumentation of downstream clients. What you keep is per-request analytics: group-by route or tenant, percentiles on `duration_ms`, error-rate SLOs, incident triage by outcome/error.type. If you need the graph and the waterfall, run a tracing library like OpenTelemetry or `dd-trace` alongside. The canonical line and the APM trace are complementary. The trace gives you the distributed call graph; the canonical line gives you the per-request summary row that answers "what happened and to whom" without opening a trace viewer.
-
-Most field names follow OTEL so that if you later decide traces are worth the cost, migrating is mostly a configuration change rather than a codebase-wide rename.
+**What you lose:** distributed call graph, waterfall of internal calls, auto-instrumentation of downstream clients. **What you keep:** group-by-anything queries, percentiles, error-rate SLOs, per-request triage. If you need the graph, run OpenTelemetry or `dd-trace` alongside. They're complementary.
 
 ### PII
 
@@ -199,9 +179,9 @@ Request
                 └──────────────────────────┘
 ```
 
-**Key invariant:** `flush()` is idempotent: whichever path fires first, the line emits once. The flag lives in the CLS record, not in the callers, so there is no coordination needed between interceptor and filter.
+**Idempotent flush:** whichever path fires first emits the line. The flag lives in the CLS record so interceptor and filter don't have to coordinate.
 
-**Why finalize() skips flush() on error:** In NestJS, RxJS `finalize()` fires *before* the exception filter (finalize is observable teardown; the filter is called after the subscription settles). If finalize flushed unconditionally, the line would emit without error fields. The interceptor tracks `hasError` via `tap({ error })` and skips flush on the error path, leaving it to the filter.
+**Why the interceptor skips flush on error:** RxJS `finalize()` fires before the exception filter, so flushing there would emit without error fields. The interceptor sets `hasError` via `tap({ error })` and lets the filter flush after enriching.
 
 ---
 
@@ -226,29 +206,17 @@ Or bring your own by implementing `ICanonicalLogger` (two lines) and passing it 
 
 ## Setup
 
-> Prefer to read code? The full setup is in [`example/`](./example/README.md), a runnable NestJS app you can `pnpm start` and probe with `curl`.
+> Prefer code? Full setup in [`example/`](./example/README.md).
 
-### 1. Prerequisites in your AppModule
+### 1. AppModule wiring
 
-`ClsModule` must be mounted **before** `CanonicalLogModule` in the imports array:
+`ClsModule` must come **before** `CanonicalLogModule`:
 
 ```typescript
-import { Module } from '@nestjs/common'
-import { ClsModule } from 'nestjs-cls'
-import { LoggerModule } from 'nestjs-pino'
-import { CanonicalLogModule } from 'nestjs-canonical-log'
-
 @Module({
   imports: [
-    // 1. CLS must come first so the scope opens before our middleware runs
     ClsModule.forRoot({ global: true, middleware: { mount: true } }),
-
-    // 2. Logger. Default is nestjs-pino. Skip this and pass
-    //    { logger: yourLogger } to CanonicalLogModule.forRoot instead
-    //    if you want Winston, console, or a custom sink.
-    LoggerModule.forRoot({ pinoHttp: { level: 'info' } }),
-
-    // 3. Canonical log
+    LoggerModule.forRoot({ pinoHttp: { level: 'info' } }), // or skip and pass { logger } below
     CanonicalLogModule.forRoot({
       'service.name': 'my-api',
       'deployment.environment': process.env.NODE_ENV,
@@ -260,18 +228,15 @@ export class AppModule {}
 
 ### 2. Wire identity (shared fields)
 
-Inject `CanonicalLogService` wherever you resolve the authenticated user and call `addFields`:
+Inject `CanonicalLogService` in your auth guard and call `addFields`:
 
 ```typescript
-import { Injectable } from '@nestjs/common'
-import { CanonicalLogService } from 'nestjs-canonical-log'
-
 @Injectable()
 export class AuthGuard {
   constructor(private readonly canonicalLog: CanonicalLogService) {}
 
-  canActivate(context: ExecutionContext): boolean {
-    const user = resolveUser(context)
+  canActivate(ctx: ExecutionContext): boolean {
+    const user = resolveUser(ctx)
     this.canonicalLog.addFields({
       tenant_id: user.tenantId,
       actor_id: user.id,
@@ -282,35 +247,18 @@ export class AuthGuard {
 }
 ```
 
-### 3. Contribute domain fields from any service
+### 3. Contribute domain fields
 
-Define a local type with namespaced keys, pass it as the generic:
+Pass a local type as the generic for call-site type safety:
 
 ```typescript
-type JobFields = {
-  'job.id'?: string
-  'job.status_from'?: string
-  'job.status_to'?: string
-}
+type JobFields = { 'job.id'?: string; 'job.status_from'?: string; 'job.status_to'?: string }
 
-@Injectable()
-export class JobsService {
-  constructor(private readonly canonicalLog: CanonicalLogService) {}
-
-  async updateStatus(id: string, newStatus: string) {
-    const job = await this.repo.find(id)
-
-    this.canonicalLog.addFields<JobFields>({
-      'job.id': id,
-      'job.status_from': job.status,
-    })
-
-    await this.repo.update(id, newStatus)
-
-    // Only set status_to after the write succeeds.
-    // If it throws, this line never runs. Gap in the log = signal.
-    this.canonicalLog.addFields<JobFields>({ 'job.status_to': newStatus })
-  }
+async updateStatus(id: string, newStatus: string) {
+  const job = await this.repo.find(id)
+  this.canonicalLog.addFields<JobFields>({ 'job.id': id, 'job.status_from': job.status })
+  await this.repo.update(id, newStatus)
+  this.canonicalLog.addFields<JobFields>({ 'job.status_to': newStatus })
 }
 ```
 
@@ -319,7 +267,7 @@ export class JobsService {
 ## Fastify
 
 ```typescript
-import { FastifyAdapter } from 'nestjs-canonical-log'
+import { FastifyAdapter } from 'nestjs-canonical-log/fastify'
 
 CanonicalLogModule.forRoot({
   'service.name': 'my-api',
@@ -327,13 +275,13 @@ CanonicalLogModule.forRoot({
 })
 ```
 
-Custom platform: implement `CanonicalHttpAdapter` (two methods: `getRoutePath` and `getRawPath`).
+Custom platform: implement `CanonicalHttpAdapter` (`getRoutePath` + `getRawPath`).
 
 ---
 
 ## Correlation IDs
 
-Correlation IDs should be injected automatically by your instrumentation library. Zero code needed in this module. They appear in every log line, including the canonical one.
+Handled by your instrumentation library (dd-trace, OpenTelemetry, etc). They appear on every log line, canonical included. Zero code here.
 
 ---
 
@@ -363,7 +311,7 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 
 ## Limitations
 
-- **HTTP requests only.** Background jobs (BullMQ, cron, queue workers) are not wired. The `POST → worker → status poll` pattern gives you canonical lines for the HTTP hops but not for the background work in between.
+- **HTTP requests only.** Background jobs (BullMQ, cron, queue workers) aren't wired. You get canonical lines for HTTP hops, not for the background work in between.
 
 ---
 
