@@ -330,8 +330,10 @@ describe('CanonicalLog — TTL timeout', () => {
   beforeEach(async () => {
     const { logs: l, logger } = makeCapturingLogger()
     logs = l
-    // Short TTL so the test doesn't wait long.
-    app = await bootstrap(logger, { recordTtlMs: 50 })
+    // Short TTL + short sweep interval so the test doesn't wait long.
+    // With sweepIntervalMs=25 and recordTtlMs=50, a hung request should be
+    // emitted within ~75 ms worst case.
+    app = await bootstrap(logger, { recordTtlMs: 50, sweepIntervalMs: 25 })
   })
 
   afterEach(async () => {
@@ -346,7 +348,7 @@ describe('CanonicalLog — TTL timeout', () => {
     await cls.run(async () => {
       svc.initialize()
       svc.addFields({ 'test.marker': 'ttl' })
-      await new Promise(r => setTimeout(r, 120))
+      await new Promise(r => setTimeout(r, 150))
     })
 
     expect(logs).toHaveLength(1)

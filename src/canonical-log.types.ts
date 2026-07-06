@@ -90,8 +90,18 @@ export interface CanonicalLogOptions {
    * How long (ms) a request can stay in-flight before we emit `outcome: 'timeout'`.
    * Set above your p99.9 with some headroom — too low drops slow-but-valid
    * requests. Default: 30_000. Set to 0 to disable.
+   *
+   * Timeouts are checked by a single recurring sweep (see sweepIntervalMs),
+   * not per-request timers, so actual eviction can be up to sweepIntervalMs
+   * late (worst case: recordTtlMs + sweepIntervalMs).
    */
   recordTtlMs?: number
+
+  /**
+   * How often (ms) the timeout sweep runs. Only active while there are
+   * in-flight records; stops itself when the app goes idle. Default: 5_000.
+   */
+  sweepIntervalMs?: number
 
   /**
    * Max concurrent records. When full, extra requests skip the canonical
@@ -121,7 +131,6 @@ export const CANONICAL_LOG_SHED_KEY: unique symbol = Symbol('canonical.shed')
 // JSON.stringify, so they naturally don't show up in the emitted line.
 export const EMITTED: unique symbol = Symbol('canonical.emitted')
 export const STARTED_AT: unique symbol = Symbol('canonical.startedAt')
-export const TTL_TIMER: unique symbol = Symbol('canonical.ttlTimer')
 
 /** DI token for the options object. */
 export const CANONICAL_LOG_OPTIONS = Symbol('CANONICAL_LOG_OPTIONS')
@@ -150,12 +159,6 @@ export interface CanonicalRecordMeta {
 
   /** When the request started (hrtime), used to compute duration_ms. */
   [STARTED_AT]: bigint
-
-  /**
-   * TTL timer. Cancelled in flush(). If it fires first, it emits the line
-   * with outcome:'timeout' and frees the counter slot.
-   */
-  [TTL_TIMER]: ReturnType<typeof setTimeout> | undefined
 }
 
 /**

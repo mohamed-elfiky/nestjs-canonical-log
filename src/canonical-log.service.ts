@@ -7,7 +7,6 @@ import {
   CANONICAL_LOGGER,
   EMITTED,
   STARTED_AT,
-  TTL_TIMER,
   type CanonicalLogOptions,
   type CanonicalRecord,
   type ICanonicalLogger,
@@ -15,12 +14,18 @@ import {
 
 const DEFAULT_MAX_ACTIVE_RECORDS = 5_000
 const DEFAULT_RECORD_TTL_MS = 30_000
+const DEFAULT_SWEEP_INTERVAL_MS = 5_000
 
 @Injectable()
 export class CanonicalLogService {
-  private activeRecords = 0
+  // Set of in-flight records. Used to enforce maxActiveRecords (via .size) and
+  // to give the sweeper direct references without going through CLS.
+  private readonly inFlight = new Set<CanonicalRecord>()
+  private sweeper: NodeJS.Timeout | undefined
+
   private readonly maxActiveRecords: number
   private readonly recordTtlMs: number
+  private readonly sweepIntervalMs: number
 
   constructor(
     private readonly cls: ClsService,
@@ -36,6 +41,7 @@ export class CanonicalLogService {
     }
     this.maxActiveRecords = options.maxActiveRecords ?? DEFAULT_MAX_ACTIVE_RECORDS
     this.recordTtlMs = options.recordTtlMs ?? DEFAULT_RECORD_TTL_MS
+    this.sweepIntervalMs = options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS
   }
 
   /**
@@ -95,58 +101,41 @@ export class CanonicalLogService {
   /**
    * Starts a new record for the current request. Called once by the middleware.
    * If we're at capacity, the request is shed (no record, no canonical line);
-   * the request itself still runs normally. A TTL timer covers hung requests
-   * — if flush() never fires, it emits with outcome:'timeout' and frees the slot.
+   * the request itself still runs normally. A recurring sweep (see sweep())
+   * covers hung requests — if flush() never fires, the sweep emits with
+   * outcome:'timeout' and frees the slot.
    */
   initialize(): void {
     // If a record already exists (e.g. addFields() lazily created one before
     // this middleware ran), do nothing.
     if (this.getRecord()) return
 
-    if (this.maxActiveRecords > 0 && this.activeRecords >= this.maxActiveRecords) {
+    if (this.maxActiveRecords > 0 && this.inFlight.size >= this.maxActiveRecords) {
       // Mark shed so addFields() stays a no-op for this request even if the
-      // counter drops below cap later.
+      // set drops below cap later.
       if (this.cls.isActive()) {
         this.cls.set(CANONICAL_LOG_SHED_KEY, true)
       }
       return
     }
 
-    this.activeRecords++
-
     const record: CanonicalRecord = {
       [EMITTED]: false,
       [STARTED_AT]: process.hrtime.bigint(),
-      [TTL_TIMER]: undefined,
       timestamp: new Date().toISOString(),
       'service.name': this.options['service.name'],
-      // stage is always present. Callers override as work progresses via
-      // svc.stage(name). If they never do, "request_started" is the terminal
-      // value — self-describing: "the request never reached a tracked stage".
       stage: 'request_started',
       ...(this.options['deployment.environment']
         ? { 'deployment.environment': this.options['deployment.environment'] }
         : {}),
     }
 
-    if (this.recordTtlMs > 0) {
-      // Timer fires outside CLS — capture `record` via closure.
-      record[TTL_TIMER] = setTimeout(() => {
-        if (record[EMITTED]) return
-        record[EMITTED] = true
-        this.activeRecords--
-
-        // Emit with what we have so hung requests stay visible.
-        record.outcome = 'timeout'
-        record.duration_ms = Number(process.hrtime.bigint() - record[STARTED_AT]) / 1_000_000
-        this.emit(record)
-      }, this.recordTtlMs)
-
-      // Don't hold the process open on shutdown.
-      record[TTL_TIMER].unref()
-    }
-
+    this.inFlight.add(record)
     this.cls.set(CANONICAL_LOG_RECORD_KEY, record)
+
+    // Start the sweeper if it's not already running. It self-terminates when
+    // the app goes idle, so this is a no-op under sustained load.
+    this.ensureSweeper()
   }
 
   /**
@@ -157,16 +146,11 @@ export class CanonicalLogService {
     const record = this.getRecord()
     if (!record || record[EMITTED]) return
 
-    // Cancel the TTL — request completed normally.
-    const timer = record[TTL_TIMER]
-    if (timer !== undefined) {
-      clearTimeout(timer)
-      record[TTL_TIMER] = undefined
-    }
-
     record[EMITTED] = true
-    this.activeRecords--
+    this.inFlight.delete(record)
     this.emit(record)
+    // Don't stop the sweeper here — let it self-terminate at the next tick.
+    // Under load this avoids churning setInterval/clearInterval per request.
   }
 
   /** Monotonic clock in ms since the request started. */
@@ -178,6 +162,48 @@ export class CanonicalLogService {
 
   private getRecord(): CanonicalRecord | undefined {
     return this.cls.get<CanonicalRecord>(CANONICAL_LOG_RECORD_KEY)
+  }
+
+  /**
+   * Start the timeout sweeper if not already running. One recurring timer for
+   * the whole app, not one per request. `.unref()` so it doesn't hold the
+   * process open on shutdown.
+   */
+  private ensureSweeper(): void {
+    if (this.sweeper || this.recordTtlMs <= 0) return
+    this.sweeper = setInterval(() => this.sweep(), this.sweepIntervalMs)
+    this.sweeper.unref()
+  }
+
+  /**
+   * Emit `outcome: 'timeout'` for any in-flight record older than recordTtlMs
+   * and prune it. Self-terminates when inFlight is empty so idle apps don't
+   * burn timer cycles.
+   */
+  private sweep(): void {
+    const now = process.hrtime.bigint()
+    const ttlNs = BigInt(this.recordTtlMs) * BigInt(1_000_000)
+
+    for (const record of this.inFlight) {
+      if (record[EMITTED]) {
+        // Should have been removed by flush(); prune defensively.
+        this.inFlight.delete(record)
+        continue
+      }
+      if (now - record[STARTED_AT] >= ttlNs) {
+        record[EMITTED] = true
+        record.outcome = 'timeout'
+        record.duration_ms = Number(now - record[STARTED_AT]) / 1_000_000
+        this.emit(record)
+        this.inFlight.delete(record)
+      }
+    }
+
+    // Nothing left to watch — stop until initialize() spins us back up.
+    if (this.inFlight.size === 0 && this.sweeper) {
+      clearInterval(this.sweeper)
+      this.sweeper = undefined
+    }
   }
 
   /**
