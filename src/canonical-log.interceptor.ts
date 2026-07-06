@@ -1,10 +1,4 @@
-import {
-  CallHandler,
-  ExecutionContext,
-  Inject,
-  Injectable,
-  NestInterceptor,
-} from '@nestjs/common'
+import { CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common'
 import { finalize, tap, type Observable } from 'rxjs'
 import type { CanonicalHttpAdapter } from './adapters/http-adapter'
 import { CanonicalLogService } from './canonical-log.service'
@@ -15,7 +9,7 @@ export class CanonicalLogInterceptor implements NestInterceptor {
   constructor(
     private readonly svc: CanonicalLogService,
     @Inject(CANONICAL_HTTP_ADAPTER) private readonly adapter: CanonicalHttpAdapter,
-  ) { }
+  ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') return next.handle()
@@ -32,7 +26,11 @@ export class CanonicalLogInterceptor implements NestInterceptor {
     let hasError = false
 
     return next.handle().pipe(
-      tap({ error: () => { hasError = true } }),
+      tap({
+        error: () => {
+          hasError = true
+        },
+      }),
       finalize(() => {
         if (!hasError) {
           const res = context.switchToHttp().getResponse<{ statusCode: number }>()

@@ -17,11 +17,7 @@ import { NestFactory } from '@nestjs/core'
 import { ClsModule, ClsService } from 'nestjs-cls'
 import request from 'supertest'
 import 'reflect-metadata'
-import {
-  CanonicalLogModule,
-  CanonicalLogService,
-  type ICanonicalLogger,
-} from '../src/index'
+import { CanonicalLogModule, CanonicalLogService, type ICanonicalLogger } from '../src/index'
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -53,7 +49,7 @@ type StatusDto = { status: string }
 
 @Injectable()
 class JobsService {
-  constructor(private readonly canonicalLog: CanonicalLogService) { }
+  constructor(private readonly canonicalLog: CanonicalLogService) {}
 
   getOne(id: string): { id: string; status: string } {
     this.canonicalLog.addFields({ 'job.id': id, 'job.status_from': 'scheduled' })
@@ -79,7 +75,7 @@ class JobsService {
 
 @Controller('jobs')
 class JobsController {
-  constructor(private readonly jobs: JobsService) { }
+  constructor(private readonly jobs: JobsService) {}
 
   @Get(':id')
   get(@Param('id') id: string) {
@@ -98,7 +94,7 @@ class JobsController {
 // auth middleware in AppModule.configure() would see no CLS context.
 @Injectable()
 class AuthMiddleware implements NestMiddleware {
-  constructor(private readonly canonicalLog: CanonicalLogService) { }
+  constructor(private readonly canonicalLog: CanonicalLogService) {}
   use(_req: unknown, _res: unknown, next: () => void) {
     this.canonicalLog.addFields({ actor_id: 'usr_test', tenant_id: 'acct_test' })
     next()
@@ -133,7 +129,7 @@ function makeSampleModule(
     controllers: [JobsController],
     providers: [JobsService],
   })
-  class TestAppModule { }
+  class TestAppModule {}
   return TestAppModule
 }
 
@@ -451,7 +447,7 @@ describe('CanonicalLog — startup validation', () => {
         CanonicalLogModule.forRoot({ 'service.name': '', logger }),
       ],
     })
-    class BadModule { }
+    class BadModule {}
     await expect(
       NestFactory.create(BadModule, { logger: false, abortOnError: false }),
     ).rejects.toThrow(/service\.name.*required/i)

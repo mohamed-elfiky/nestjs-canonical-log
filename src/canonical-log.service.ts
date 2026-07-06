@@ -118,8 +118,7 @@ export class CanonicalLogService {
 
         // Emit with what we have so hung requests stay visible.
         record.outcome = 'timeout'
-        record.duration_ms =
-          Number(process.hrtime.bigint() - record[STARTED_AT]) / 1_000_000
+        record.duration_ms = Number(process.hrtime.bigint() - record[STARTED_AT]) / 1_000_000
         this.emit(record)
       }, this.recordTtlMs)
 

@@ -1,10 +1,4 @@
-import {
-  DynamicModule,
-  Global,
-  MiddlewareConsumer,
-  Module,
-  NestModule,
-} from '@nestjs/common'
+import { DynamicModule, Global, MiddlewareConsumer, Module, NestModule } from '@nestjs/common'
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core'
 import { PinoLogger } from 'nestjs-pino'
 import { ExpressAdapter } from './adapters/express.adapter'
@@ -46,9 +40,8 @@ export class CanonicalLogModule implements NestModule {
    * import { FastifyAdapter } from 'nestjs-canonical-log'
    * CanonicalLogModule.forRoot({ 'service.name': 'my-api', adapter: new FastifyAdapter() })
    */
-  static forRoot<_TShared = DefaultSharedFields>(
-    options: CanonicalLogOptions,
-  ): DynamicModule {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  static forRoot<_TShared = DefaultSharedFields>(options: CanonicalLogOptions): DynamicModule {
     return {
       global: true,
       module: CanonicalLogModule,
@@ -65,10 +58,10 @@ export class CanonicalLogModule implements NestModule {
         options.logger
           ? { provide: CANONICAL_LOGGER, useValue: options.logger }
           : {
-            provide: CANONICAL_LOGGER,
-            useFactory: (pino: PinoLogger) => new PinoCanonicalLogger(pino),
-            inject: [PinoLogger],
-          },
+              provide: CANONICAL_LOGGER,
+              useFactory: (pino: PinoLogger) => new PinoCanonicalLogger(pino),
+              inject: [PinoLogger],
+            },
         CanonicalLogService,
         {
           provide: APP_INTERCEPTOR,

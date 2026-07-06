@@ -28,21 +28,19 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
     const req = host.switchToHttp().getRequest<unknown>()
 
     const status =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR
+      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR
 
     const errorMessage =
       exception instanceof HttpException
         ? (() => {
-          const response = exception.getResponse()
-          if (typeof response === 'string') return response
-          if (typeof response === 'object' && response !== null) {
-            const r = response as Record<string, unknown>
-            if (typeof r['message'] === 'string') return r['message']
-          }
-          return exception.message
-        })()
+            const response = exception.getResponse()
+            if (typeof response === 'string') return response
+            if (typeof response === 'object' && response !== null) {
+              const r = response as Record<string, unknown>
+              if (typeof r['message'] === 'string') return r['message']
+            }
+            return exception.message
+          })()
         : exception instanceof Error
           ? exception.message
           : String(exception)
@@ -59,10 +57,7 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
       // error.type (class name) is bounded i.e. has low cardinality. This is the queryable dimension.
       // error.message is free text. It is contextual only, shouldn't be used for querying.
       // error.stack is deliberately omitted to avoid leaking sensitive info into logs.
-      'error.type':
-        exception instanceof Error
-          ? exception.constructor.name
-          : typeof exception,
+      'error.type': exception instanceof Error ? exception.constructor.name : typeof exception,
       'error.message': errorMessage,
     })
 
