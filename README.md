@@ -25,7 +25,7 @@ The problems:
 
 - **You can't query it.** "How many jobs were updated by tenant X in the last hour, and what was the p99 latency?" requires parsing free-text across millions of lines.
 - **It breaks on failure.** The exception bubbles before the "returning 200" line emits. You get half a trail and have to infer the rest.
-- **Volume without density.** Six lines, one request, none of them individually answerable. You need all six to reconstruct what happened — and they're interleaved with every other concurrent request. Even with tracing, you're still reconstructing state from six partial lines instead of reading one.
+- **Volume without density.** Six lines, one request, none of them individually answerable. You need all six to reconstruct what happened, and they're interleaved with every other concurrent request. Even with tracing, you're still reconstructing state from six partial lines instead of reading one.
 - **It's random.** Every engineer decides independently what to log, when, and with what fields. There is no contract.
 - **Structured isn't enough.** Structured logs alone don't fix this. In a large org, you can't reliably get every team to design their logs with observability in mind. Canonical logs shift the mindset: the log line becomes part of the design step, not an afterthought.
 
@@ -69,18 +69,18 @@ canonicalLog.addFields({ 'job.id': id, 'job.status_from': job.status })
 canonicalLog.addFields({ 'job.status_to': newStatus })
 ```
 
-If the write throws, `job.status_to` is absent from the canonical line. That absence is not noise — it's a precise marker of where the request died. You don't need to correlate breadcrumbs. The gap tells you.
+If the write throws, `job.status_to` is absent from the canonical line. That absence isn't noise. It's a precise marker of where the request died. You don't need to correlate breadcrumbs. The gap tells you.
 
 ### Fields are a contract, not a convenience
 
-Random logs rot. Engineers change strings, rename keys, drop fields — and nothing breaks at compile time. Canonical fields are different: they are the queryable API of your observability system. Dashboards, alerts, and SLO monitors are built on them. Breaking a field name breaks an alert.
+Random logs rot. Engineers change strings, rename keys, drop fields, and nothing breaks at compile time. Canonical fields are different: they are the queryable API of your observability system. Dashboards, alerts, and SLO monitors are built on them. Breaking a field name breaks an alert.
 
 This is why:
 
 - **Framework fields** (`http.route`, `http.response.status_code`, etc.) are set by the mechanism, never by application code. You cannot accidentally break them.
 - **Shared fields** (`tenant_id`, `actor_id`, `actor_type`) show up on every request and are owned by the auth layer. One place, one team, one contract.
 - **Domain fields** are namespaced (`job.id`, `billing.invoice_id`) and typed locally at the call site. TypeScript enforces the shape within a module; the namespace enforces non-collision across modules.
-- **Field names follow OTEL semantic conventions where practical.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. A few fields — `duration_ms` (OTEL uses `duration` in nanoseconds; we use ms for human readability) and `outcome` (custom, not in OTEL) — deviate deliberately. Most fields port cleanly if you migrate from logs to spans; those two would need renaming.
+- **Field names follow OTEL semantic conventions where practical.** Not because we use OpenTelemetry, but because OTEL names are stable, widely known, and natively parsed by famous observability tools. A few fields deviate deliberately: `duration_ms` (OTEL uses `duration` in nanoseconds; we use ms for human readability) and `outcome` (custom, not in OTEL). Most fields port cleanly if you migrate from logs to spans; those two would need renaming.
 
 ### Why logs, not spans
 
@@ -94,7 +94,7 @@ Most field names follow OTEL so that if you later decide traces are worth the co
 
 ### PII
 
-Canonical logs concentrate risk — one line packs tenant, actor, and error message. This library does no redaction; configure `redact` on your pino logger and don't put raw PII in `addFields()`.
+Canonical logs concentrate risk. One line packs tenant, actor, and error message. This library does no redaction; configure redaction at your logger layer (e.g. pino's `redact` option, or your custom `ICanonicalLogger` implementation) and don't put raw PII in `addFields()`.
 
 ---
 
@@ -123,7 +123,7 @@ Every HTTP request emits exactly one JSON line with `"msg":"canonical"`:
 }
 ```
 
-On failure the line still emits — with error detail instead of success fields:
+On failure the line still emits, with error detail instead of success fields:
 
 ```json
 {
@@ -142,11 +142,11 @@ On failure the line still emits — with error detail instead of success fields:
 }
 ```
 
-`job.status_to` is absent — the write never completed. Sparseness is signal.
+`job.status_to` is absent. The write never completed. Sparseness is signal.
 
 ---
 
-## How it works — the four pieces
+## How it works: the four pieces
 
 ```
 Request
@@ -184,7 +184,7 @@ Request
                 └──────────────────────────┘
 ```
 
-**Key invariant:** `flush()` is idempotent — whichever path fires first, the line emits once. The flag lives in the CLS record, not in the callers, so there is no coordination needed between interceptor and filter.
+**Key invariant:** `flush()` is idempotent: whichever path fires first, the line emits once. The flag lives in the CLS record, not in the callers, so there is no coordination needed between interceptor and filter.
 
 **Why finalize() skips flush() on error:** In NestJS, RxJS `finalize()` fires *before* the exception filter (finalize is observable teardown; the filter is called after the subscription settles). If finalize flushed unconditionally, the line would emit without error fields. The interceptor tracks `hasError` via `tap({ error })` and skips flush on the error path, leaving it to the filter.
 
@@ -194,17 +194,24 @@ Request
 
 ```bash
 npm install nestjs-canonical-log
-# peer deps
-npm install nestjs-cls nestjs-pino rxjs reflect-metadata
+# required peer deps
+npm install nestjs-cls rxjs reflect-metadata
 ```
 
-Note: `nestjs-pino` is only required if you use the default logger — bring your own to drop it.
+Then pick a logger:
+
+```bash
+# option A: use the default (nestjs-pino)
+npm install nestjs-pino
+```
+
+Or bring your own by implementing `ICanonicalLogger` (two lines) and passing it via `forRoot({ logger })`. See [Setup](#setup) below.
 
 ---
 
 ## Setup
 
-> Prefer to read code? The full setup is in [`example/`](./example/README.md) — a runnable NestJS app you can `pnpm start` and probe with `curl`.
+> Prefer to read code? The full setup is in [`example/`](./example/README.md), a runnable NestJS app you can `pnpm start` and probe with `curl`.
 
 ### 1. Prerequisites in your AppModule
 
@@ -221,7 +228,9 @@ import { CanonicalLogModule } from 'nestjs-canonical-log'
     // 1. CLS must come first so the scope opens before our middleware runs
     ClsModule.forRoot({ global: true, middleware: { mount: true } }),
 
-    // 2. Logger of your of your choice by default we use nestjs 
+    // 2. Logger. Default is nestjs-pino. Skip this and pass
+    //    { logger: yourLogger } to CanonicalLogModule.forRoot instead
+    //    if you want Winston, console, or a custom sink.
     LoggerModule.forRoot({ pinoHttp: { level: 'info' } }),
 
     // 3. Canonical log
@@ -284,7 +293,7 @@ export class JobsService {
     await this.repo.update(id, newStatus)
 
     // Only set status_to after the write succeeds.
-    // If it throws, this line never runs — gap in the log = signal.
+    // If it throws, this line never runs. Gap in the log = signal.
     this.canonicalLog.addFields<JobFields>({ 'job.status_to': newStatus })
   }
 }
@@ -309,7 +318,7 @@ Custom platform: implement `CanonicalHttpAdapter` (two methods: `getRoutePath` a
 
 ## Correlation IDs
 
-Correlation IDs should be injected automatically by your instrumentation library. Zero code needed in this module — they appear in every log line, including the canonical one.
+Correlation IDs should be injected automatically by your instrumentation library. Zero code needed in this module. They appear in every log line, including the canonical one.
 
 ---
 
@@ -328,7 +337,7 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable                           |
 | `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)                              |
 | `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)                               |
-| `error.message`             | error attrs   | filter                   | exception message (contextual — no stack; use an error tracker for that) |
+| `error.message`             | error attrs   | filter                   | exception message (contextual, no stack; use an error tracker for that)  |
 | `tenant_id`                 | —             | caller (auth layer)      | shared field, optional                                                   |
 | `actor_id`                  | —             | caller (auth layer)      | shared field, optional                                                   |
 | `actor_type`                | —             | caller (auth layer)      | shared field, optional                                                   |

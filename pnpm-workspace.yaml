@@ -3,5 +3,6 @@ packages:
   - 'example'
 allowBuilds:
   '@nestjs/core': true
+  esbuild: true
   nestjs-pino: true
   unrs-resolver: true
