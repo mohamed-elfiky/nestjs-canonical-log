@@ -72,6 +72,22 @@ export class CanonicalLogService {
     Object.assign(record, fields)
   }
 
+  /**
+   * Set the current stage of the request. The value at flush time tells the
+   * reader where the request was when it stopped.
+   *
+   * Enforce a stage enum at compile time using a local union type:
+   *
+   *   type JobStage = 'fetching_job' | 'writing_status' | 'notifying' | 'done'
+   *   canonicalLog.stage<JobStage>('fetching_job')
+   *
+   * Keep the set of values small per handler so `stage` stays queryable as
+   * a dimension.
+   */
+  stage<T extends string>(name: T): void {
+    this.addFields({ stage: name })
+  }
+
   // ---------------------------------------------------------------------------
   // Internal — used by the lib's own middleware, interceptor, and filter.
   // ---------------------------------------------------------------------------
@@ -104,6 +120,10 @@ export class CanonicalLogService {
       [TTL_TIMER]: undefined,
       timestamp: new Date().toISOString(),
       'service.name': this.options['service.name'],
+      // stage is always present. Callers override as work progresses via
+      // svc.stage(name). If they never do, "request_started" is the terminal
+      // value — self-describing: "the request never reached a tracked stage".
+      stage: 'request_started',
       ...(this.options['deployment.environment']
         ? { 'deployment.environment': this.options['deployment.environment'] }
         : {}),

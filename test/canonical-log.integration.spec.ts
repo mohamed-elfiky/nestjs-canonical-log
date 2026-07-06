@@ -60,6 +60,8 @@ class JobsService {
   }
 
   updateStatus(id: string, next: string) {
+    type JobStage = 'fetching_job' | 'writing_status' | 'done'
+    this.canonicalLog.stage<JobStage>('fetching_job')
     this.canonicalLog.addFields({
       'job.id': id,
       'job.status_from': 'scheduled',
@@ -68,7 +70,9 @@ class JobsService {
       // Non-HttpException throw — should still produce a canonical line.
       throw new TypeError('unexpected status transition')
     }
+    this.canonicalLog.stage<JobStage>('writing_status')
     this.canonicalLog.addFields({ 'job.status_to': next })
+    this.canonicalLog.stage<JobStage>('done')
     return { id, status: next }
   }
 }
@@ -185,6 +189,18 @@ describe('CanonicalLog — HTTP success path', () => {
     expect(line['actor_id']).toBe('usr_test')
     expect(line['job.id']).toBe('job_42')
     expect(line['job.status_from']).toBe('scheduled')
+    // stage is always present with the initial value unless overridden.
+    expect(line['stage']).toBe('request_started')
+  })
+
+  it('emits the terminal stage set by the handler on success', async () => {
+    await request(app.getHttpServer())
+      .post('/jobs/job_1/status')
+      .send({ status: 'in_progress' })
+      .expect(201)
+    expect(logs).toHaveLength(1)
+    // updateStatus() walks fetching_job → writing_status → done.
+    expect(logs[0]!['stage']).toBe('done')
   })
 
   it('excludes internal Symbol keys from the emitted wire format', async () => {
@@ -235,6 +251,8 @@ describe('CanonicalLog — HTTP error path', () => {
     expect(line['outcome']).toBe('error')
     expect(line['error.type']).toBe('TypeError')
     expect(line['error.message']).toBe('unexpected status transition')
+    // stage should be pinned at the checkpoint the throw interrupted.
+    expect(line['stage']).toBe('fetching_job')
     // error.stack is deliberately NOT emitted — too large for canonical logs,
     // and better handled by an error tracker correlated via trace_id.
     expect(line['error.stack']).toBeUndefined()

@@ -29,7 +29,7 @@ The problems:
 - **It's random.** Every engineer decides independently what to log, when, and with what fields. There is no contract.
 - **Structured isn't enough.** Structured logs alone don't fix this. In a large org, you can't reliably get every team to design their logs with observability in mind. Canonical logs shift the mindset: the log line becomes part of the design step, not an afterthought.
 
-### Calculated observability
+### What observability actually means
 
 Observability, properly defined, is the ability to ask arbitrary questions about your system's behavior from the outside, without shipping new code to answer them. The key word is **arbitrary**: you don't know in advance what questions an incident will require.
 
@@ -47,31 +47,42 @@ service.name:my-api http.route:/v1/jobs/:id/status outcome:ok tenant_id:acct_8f2
 
 Group by `tenant_id`, percentile on `duration_ms`. Done.
 
-### The failure-correctness invariant
+### Errors must still emit a line
 
-This is the single most important property of the pattern and the hardest to get right.
+The hardest part of the pattern to get right.
 
 **The line must emit on failure, with full error detail.** Not "usually". Not "unless it's a 500". Always.
 
 This is why Stripe wraps the entire request in a Ruby `ensure` block this is the canonical equivalent of `finally`. A line that only emits on success is useless for the one case where you need it most: the 3am incident where the request died mid-flight and you need to know exactly where and why.
 
-This implementation achieves failure-correctness through a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if the two paths ever overlap the second call is a safe no-op. The flag that enforces exactly-once lives in the per-request CLS record, not in the callers, so no coordination is needed.
+This library handles this through a split: the interceptor flushes on success, the exception filter flushes on error. `flush()` is idempotent, so if the two paths ever overlap the second call is a safe no-op. The flag that enforces exactly-once lives in the per-request CLS record, not in the callers, so no coordination is needed.
 
-### Sparseness is signal
+### The `stage` field tells you where it broke
 
-Domain fields are set incrementally as work happens:
+Every canonical line carries a `stage` field. Set it as work progresses. The value at emit time tells anyone reading the line where the request was when it stopped, without needing to know the handler code.
 
 ```typescript
-// Set before the DB write
-canonicalLog.addFields({ 'job.id': id, 'job.status_from': job.status })
+type JobStage = 'fetching_job' | 'writing_status' | 'notifying' | 'done'
 
-// Set only after the DB write succeeds
-canonicalLog.addFields({ 'job.status_to': newStatus })
+canonicalLog.stage<JobStage>('fetching_job')
+const job = await db.getJob(id)
+
+canonicalLog.stage<JobStage>('writing_status')
+await db.updateStatus(job.id, newStatus)
+
+canonicalLog.stage<JobStage>('notifying')
+await queue.enqueue({ jobId: job.id })
+
+canonicalLog.stage<JobStage>('done')
 ```
 
-If the write throws, `job.status_to` is absent from the canonical line. That absence isn't noise. It's a precise marker of where the request died. You don't need to correlate breadcrumbs. The gap tells you.
+If the DB write throws, the emitted line has `stage: "writing_status"`. Group by `stage` where `outcome:error` to see which stages fail most often across your app. That's a first-class debugging query no matter who wrote the handler.
 
-### Fields are a contract, not a convenience
+**Enforce a stage enum at compile time.** Define a local union type per handler and pass it as the type argument. TypeScript catches typos and prevents high-cardinality drift ("fetching-job" vs "fetching_job" vs "Fetching Job"). If you don't set a stage, the terminal value is `request_started`, which is honest: "no stage was tracked."
+
+Domain fields (`job.status_from`, `job.status_to`) can still be set incrementally as a secondary signal. The `status_to` being absent under `stage: "writing_status"` reinforces "the write didn't complete." But `stage` is what makes the log self-describing.
+
+### Fields are part of your API
 
 Random logs rot. Engineers change strings, rename keys, drop fields, and nothing breaks at compile time. Canonical fields are different: they are the queryable API of your observability system. Dashboards, alerts, and SLO monitors are built on them. Breaking a field name breaks an alert.
 
@@ -114,6 +125,7 @@ Every HTTP request emits exactly one JSON line with `"msg":"canonical"`:
   "http.response.status_code": 200,
   "duration_ms": 143,
   "outcome": "ok",
+  "stage": "done",
   "tenant_id": "acct_8f2c",
   "actor_id": "usr_4471",
   "actor_type": "human",
@@ -135,6 +147,7 @@ On failure the line still emits, with error detail instead of success fields:
   "http.response.status_code": 500,
   "duration_ms": 5012,
   "outcome": "error",
+  "stage": "writing_status",
   "error.type": "QueryTimeoutError",
   "error.message": "statement timeout exceeded",
   "tenant_id": "acct_8f2c",
@@ -144,7 +157,7 @@ On failure the line still emits, with error detail instead of success fields:
 }
 ```
 
-`job.status_to` is absent. The write never completed. Sparseness is signal.
+`job.status_to` is absent. The write never completed. That's the whole point.
 
 ---
 
@@ -338,6 +351,7 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `http.response.status_code` | http spans    | interceptor / filter     |                                                                          |
 | `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable                           |
 | `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)                              |
+| `stage`                     | —             | service (`stage()`)      | where the request was; defaults to `"request_started"`                   |
 | `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)                               |
 | `error.message`             | error attrs   | filter                   | exception message (contextual, no stack; use an error tracker for that)  |
 | `tenant_id`                 | —             | caller (auth layer)      | shared field, optional                                                   |

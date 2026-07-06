@@ -39,6 +39,21 @@ export interface FrameworkFields {
 
   /** The exception message. Only on errors. */
   'error.message'?: string
+
+  /**
+   * Where the request was when the line was emitted. Always present.
+   * The library initializes it to "request_started" at the start of every
+   * request. Update it as work progresses via canonicalLog.stage(name).
+   * Terminal value on a failed line points at where the request stopped.
+   *
+   * Recommended:
+   *  Keep the set of values small (< ~50 per handler) to preserve queryability.
+   *  Enforce a stage enum at compile time using a local union type:
+   *
+   *    type JobStage = 'fetching_job' | 'writing_status' | 'notifying' | 'done'
+   *    canonicalLog.stage<JobStage>('fetching_job')
+   */
+  stage: string
 }
 
 // ---------------------------------------------------------------------------
