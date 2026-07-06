@@ -1,13 +1,15 @@
 /**
- * Overhead benchmark. Three scenarios, same handler:
+ * Overhead benchmark. Same three scenarios (bare-nest / nest+pino /
+ * nest+pino+canonical) run against two handlers:
  *
- *   1. Bare Nest             — no logging at all. Absolute floor.
- *   2. Nest + pino-http      — typical production baseline (per-request line
- *                              from pino-http, no canonical).
- *   3. Nest + pino-http + canonical — same setup as (2) + our library on top.
+ *   /ping     — synchronous no-op. Isolates library CPU cost. Useful for
+ *               regression detection, misleading for judging production impact.
+ *   /work     — awaits ~50 ms of simulated I/O. Approximates a real handler
+ *               (DB read, downstream HTTP call, etc). This is the number
+ *               that reflects what consumers actually feel.
  *
- * Everything logs to /dev/null equivalent (a discarding stream) so we measure
- * CPU/allocation cost, not I/O to stdout.
+ * Log output goes to a discarding stream so we measure CPU/allocation cost,
+ * not stdio throughput.
  */
 import 'reflect-metadata'
 import { Writable } from 'node:stream'
@@ -20,6 +22,7 @@ import { CanonicalLogModule } from '../src/index'
 
 const DURATION_SEC = Number(process.env.BENCH_DURATION ?? 5)
 const CONNECTIONS = Number(process.env.BENCH_CONNECTIONS ?? 50)
+const WORK_MS = Number(process.env.BENCH_WORK_MS ?? 50)
 const PORT_BASE = 4001
 const PORT_PINO = 4002
 const PORT_CANONICAL = 4003
@@ -28,6 +31,14 @@ const PORT_CANONICAL = 4003
 class HelloController {
   @Get('/ping')
   ping() {
+    return { ok: true }
+  }
+
+  @Get('/work')
+  async work() {
+    // Approximates real request work: async I/O that yields the event loop.
+    // 50ms is in the ballpark of a fast DB read or a warm downstream call.
+    await new Promise(r => setTimeout(r, WORK_MS))
     return { ok: true }
   }
 }
@@ -71,11 +82,11 @@ class PinoOnlyModule {}
 })
 class CanonicalModule {}
 
-async function runOne(port: number): Promise<autocannon.Result> {
+async function runOne(port: number, path: string): Promise<autocannon.Result> {
   return new Promise((resolve, reject) => {
     autocannon(
       {
-        url: `http://127.0.0.1:${port}/ping`,
+        url: `http://127.0.0.1:${port}${path}`,
         connections: CONNECTIONS,
         duration: DURATION_SEC,
       },
@@ -84,10 +95,10 @@ async function runOne(port: number): Promise<autocannon.Result> {
   })
 }
 
-async function runScenario(name: string, moduleClass: unknown, port: number) {
+async function runScenario(name: string, moduleClass: unknown, port: number, path: string) {
   const app = await NestFactory.create(moduleClass as never, { logger: false })
   await app.listen(port)
-  const result = await runOne(port)
+  const result = await runOne(port, path)
   await app.close()
   return { name, result }
 }
@@ -99,13 +110,13 @@ function fmt(n: number, w = 8) {
   return n.toFixed(2).padStart(w)
 }
 
-async function main() {
-  process.stderr.write(`\nbench: ${CONNECTIONS} connections, ${DURATION_SEC}s per run\n\n`)
+async function runSuite(label: string, path: string) {
+  process.stderr.write(`\n=== ${label} (${path}) ===\n\n`)
 
   const scenarios = [
-    await runScenario('bare-nest', BareModule, PORT_BASE),
-    await runScenario('nest+pino', PinoOnlyModule, PORT_PINO),
-    await runScenario('nest+pino+canonical', CanonicalModule, PORT_CANONICAL),
+    await runScenario('bare-nest', BareModule, PORT_BASE, path),
+    await runScenario('nest+pino', PinoOnlyModule, PORT_PINO, path),
+    await runScenario('nest+pino+canonical', CanonicalModule, PORT_CANONICAL, path),
   ]
 
   const header = pad('scenario', 24) + pad('req/s', 12) + pad('p50 (ms)', 12) + pad('p99 (ms)', 12)
@@ -122,7 +133,6 @@ async function main() {
     )
   }
 
-  // Deltas relative to the pino-only baseline (the realistic comparison).
   const pinoOnly = scenarios[1]!.result
   const canonical = scenarios[2]!.result
   const rpsDelta =
@@ -130,7 +140,20 @@ async function main() {
   const p99Delta = canonical.latency.p99 - pinoOnly.latency.p99
 
   process.stderr.write(
-    `\nadding canonical to pino-only: ${rpsDelta.toFixed(1)}% req/s, +${p99Delta.toFixed(2)} ms p99\n\n`,
+    `\nadding canonical to pino-only: ${rpsDelta.toFixed(1)}% req/s, +${p99Delta.toFixed(2)} ms p99\n`,
+  )
+}
+
+async function main() {
+  process.stderr.write(
+    `\nbench: ${CONNECTIONS} connections, ${DURATION_SEC}s per run, ${WORK_MS}ms simulated work in /work\n`,
+  )
+
+  await runSuite('no-op handler', '/ping')
+  await runSuite('realistic handler', '/work')
+
+  process.stderr.write(
+    '\nnote: /ping is a micro-benchmark. Judge production impact by /work.\n\n',
   )
 }
 
