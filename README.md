@@ -79,9 +79,9 @@ Random logs rot. Canonical fields are the queryable API your dashboards and aler
 
 ### Why logs, not spans
 
-Spans are the richer primitive but expensive at scale. **Cardinality is the driver.** One request produces many spans (handler + one per DB query + one per outbound call). At 1,000 req/s that's 10,000+ spans/s. APM vendors price per-host + per-indexed-span. Log management prices per GB + per event. A canonical line is exactly one event per request. That's the 10x reduction.
+Spans are the richer primitive. Canonical logs are the simpler one.
 
-**"Why not one wide span per request instead?"** Sampling. APM vendors drop 90-99% of successful traces at ingest to control cost, head-based or tail-based. That means "what happened to *this* request?" often can't be answered because the span wasn't kept. Log management doesn't sample by default, so canonical logs give you 100% coverage. That's the real differentiator, not just cheaper storage.
+**"Why not one wide span per request instead?"** Sampling. APM vendors drop most successful traces at ingest, head-based or tail-based, so "what happened to *this specific* request from tenant X at 3:42 PM?" often can't be answered because the span wasn't kept. Logs are typically retained without sampling, so a canonical line gives 100% coverage of every request. That's the real differentiator.
 
 **What you lose:** distributed call graph, waterfall of internal calls, auto-instrumentation of downstream clients. **What you keep:** group-by-anything queries, percentiles, error-rate SLOs, per-request triage. If you need the graph, run OpenTelemetry or `dd-trace` alongside. They're complementary.
 
