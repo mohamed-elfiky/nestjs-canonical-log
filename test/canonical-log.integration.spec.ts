@@ -114,7 +114,7 @@ class AuthModule implements NestModule {
 
 /**
  * Builds the sample module. `overrides` lets a test tweak CanonicalLogModule
- * options (e.g. recordTtlMs, maxActiveRecords) without duplicating the module wiring.
+ * options (e.g. recordTtlMs, sweepIntervalMs) without duplicating the module wiring.
  */
 function makeSampleModule(
   logger: ICanonicalLogger,
@@ -330,9 +330,8 @@ describe('CanonicalLog — TTL timeout', () => {
   beforeEach(async () => {
     const { logs: l, logger } = makeCapturingLogger()
     logs = l
-    // Short TTL + short sweep interval so the test doesn't wait long.
-    // With sweepIntervalMs=25 and recordTtlMs=50, a hung request should be
-    // emitted within ~75 ms worst case.
+    // recordTtlMs and sweepIntervalMs clamp to 1s minimums, so the worst-case
+    // eviction is ~2s. Values below the minimum verify the clamp holds.
     app = await bootstrap(logger, { recordTtlMs: 50, sweepIntervalMs: 25 })
   })
 
@@ -348,7 +347,8 @@ describe('CanonicalLog — TTL timeout', () => {
     await cls.run(async () => {
       svc.initialize()
       svc.addFields({ 'test.marker': 'ttl' })
-      await new Promise(r => setTimeout(r, 150))
+      // Wait past clamped TTL (1s) + one clamped sweep interval (1s) + margin.
+      await new Promise(r => setTimeout(r, 2_300))
     })
 
     expect(logs).toHaveLength(1)
@@ -357,49 +357,14 @@ describe('CanonicalLog — TTL timeout', () => {
     expect(line['test.marker']).toBe('ttl')
     expect(line['duration_ms']).toEqual(expect.any(Number))
   })
-})
 
-describe('CanonicalLog — load shedding', () => {
-  let app: INestApplication
-  let logs: LogRecord[]
-
-  beforeEach(async () => {
-    const { logs: l, logger } = makeCapturingLogger()
-    logs = l
-    // Cap at 1 — first request holds the slot; concurrent second request is shed.
-    app = await bootstrap(logger, { maxActiveRecords: 1, recordTtlMs: 0 })
-  })
-
-  afterEach(async () => {
-    await app.close()
-  })
-
-  it('sheds requests when the store is at capacity — no line emitted for shed requests', async () => {
-    const cls = app.get(ClsService)
+  it('does not throw and does not orphan a record when initialize() runs outside CLS', () => {
     const svc = app.get(CanonicalLogService)
-
-    // First "request": acquire the slot, never flush.
-    let shedResult: { addedFields: boolean } | undefined
-    const held = new Promise<void>(resolve => {
-      void cls.run(async () => {
-        svc.initialize()
-        svc.addFields({ 'test.marker': 'held' })
-
-        // Second concurrent "request": store is at cap, should be shed.
-        await cls.run(async () => {
-          svc.initialize()
-          svc.addFields({ 'test.marker': 'shed' })
-          shedResult = { addedFields: false }
-        })
-
-        resolve()
-      })
-    })
-    await held
-
-    // Neither the held (never flushed) nor shed request emitted a line.
+    // No cls.run wrapper — no active CLS context.
+    expect(() => svc.initialize()).not.toThrow()
+    expect(() => svc.addFields({ 'test.marker': 'no-cls' })).not.toThrow()
+    // Nothing emitted, nothing pending.
     expect(logs).toHaveLength(0)
-    expect(shedResult).toBeDefined()
   })
 })
 

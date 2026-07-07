@@ -9,7 +9,8 @@
 - Wrap the underlying logger call in try/catch — observability failures no longer break the request.
 - Skip `super.catch()` for non-HTTP transports (was misbehaving in hybrid apps).
 - Fix deprecated `rxjs/operators` import.
-- Persist the shed flag in CLS so a mid-request capacity change doesn't spawn a record with a wrong start time.
+- Remove load shedding (`maxActiveRecords`). It silently dropped canonical lines under load, exactly when you need them. The TTL sweep is the memory bound now: `recordTtlMs` clamps to a 1s minimum and can no longer be disabled.
+- Guard `initialize()` against running outside a CLS context (was throwing per-request when ClsModule wasn't mounted).
 - Validate `service` at boot — throw if empty.
 - Add integration tests (13, all real Nest + supertest — no mocks).
 - Add PII / redaction guidance to the README.

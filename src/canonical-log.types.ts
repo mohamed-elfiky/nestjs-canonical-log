@@ -89,7 +89,8 @@ export interface CanonicalLogOptions {
   /**
    * How long (ms) a request can stay in-flight before we emit `outcome: 'timeout'`.
    * Set above your p99.9 with some headroom — too low drops slow-but-valid
-   * requests. Default: 30_000. Set to 0 to disable.
+   * requests. Default: 30_000, minimum 1_000 (the TTL is the memory bound for
+   * in-flight records, so it can't be disabled).
    *
    * Timeouts are checked by a single recurring sweep (see sweepIntervalMs),
    * not per-request timers, so actual eviction can be up to sweepIntervalMs
@@ -99,15 +100,10 @@ export interface CanonicalLogOptions {
 
   /**
    * How often (ms) the timeout sweep runs. Only active while there are
-   * in-flight records; stops itself when the app goes idle. Default: 5_000.
+   * in-flight records; stops itself when the app goes idle.
+   * Default: 5_000, minimum 1_000.
    */
   sweepIntervalMs?: number
-
-  /**
-   * Max concurrent records. When full, extra requests skip the canonical
-   * line but are still served normally. Default: 5000. Set to 0 to disable.
-   */
-  maxActiveRecords?: number
 
   /**
    * HTTP adapter. Defaults to Express. Use FastifyAdapter for Fastify, or
@@ -122,9 +118,6 @@ export interface CanonicalLogOptions {
 
 /** Where in CLS we store the record. */
 export const CANONICAL_LOG_RECORD_KEY: unique symbol = Symbol('canonical.record')
-
-/** Marker in CLS meaning "we skipped this request because we were at capacity." */
-export const CANONICAL_LOG_SHED_KEY: unique symbol = Symbol('canonical.shed')
 
 // Symbol keys for internal record state. Unexported at the package level so
 // callers can't overwrite them via addFields(). Symbols are also skipped by
