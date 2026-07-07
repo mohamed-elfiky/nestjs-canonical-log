@@ -29,10 +29,13 @@ export interface FrameworkFields {
   duration_ms?: number
 
   /**
-   * How the request ended: "ok", "error", or "timeout" (TTL expired before
-   * flush — we emit anyway so hung requests stay visible).
+   * How the request ended.
+   *  - "ok"       handler completed and a response was sent
+   *  - "error"    something threw
+   *  - "timeout"  TTL expired before flush; emitted anyway so hung requests stay visible
+   *  - "shutdown" app shut down with the request still in flight
    */
-  outcome?: 'ok' | 'error' | 'timeout'
+  outcome?: 'ok' | 'error' | 'timeout' | 'shutdown'
 
   /** The exception class name (e.g. "QueryTimeoutError"). Only on errors. */
   'error.type'?: string

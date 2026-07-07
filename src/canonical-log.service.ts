@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common'
+import { Inject, Injectable, type OnApplicationShutdown } from '@nestjs/common'
 import { ClsService } from 'nestjs-cls'
 import {
   CANONICAL_LOG_OPTIONS,
@@ -19,7 +19,7 @@ const MIN_RECORD_TTL_MS = 1_000
 const MIN_SWEEP_INTERVAL_MS = 1_000
 
 @Injectable()
-export class CanonicalLogService {
+export class CanonicalLogService implements OnApplicationShutdown {
   // In-flight records. Gives the sweeper direct references without going
   // through CLS. Bounded by arrival-rate x TTL: flush removes on completion,
   // sweep evicts anything older than recordTtlMs.
@@ -73,6 +73,9 @@ export class CanonicalLogService {
       record = this.getRecord()
       if (!record) return
     }
+    // Already emitted (e.g. swept as timeout while the request was hanging):
+    // don't mutate a record the logger may have already serialized.
+    if (record[EMITTED]) return
     Object.assign(record, fields)
   }
 
@@ -150,6 +153,29 @@ export class CanonicalLogService {
     const record = this.getRecord()
     if (!record) return undefined
     return Number(process.hrtime.bigint() - record[STARTED_AT]) / 1_000_000
+  }
+
+  /**
+   * Flush whatever is still in flight when the app shuts down (SIGTERM during
+   * a rolling deploy, app.close() in tests). Without this, records for
+   * requests killed mid-flight vanish silently. Also stops the sweeper so it
+   * can't fire against a closed logger.
+   */
+  onApplicationShutdown(): void {
+    if (this.sweeper) {
+      clearInterval(this.sweeper)
+      this.sweeper = undefined
+    }
+    const now = process.hrtime.bigint()
+    for (const record of this.inFlight) {
+      if (!record[EMITTED]) {
+        record[EMITTED] = true
+        record.outcome = 'shutdown'
+        record.duration_ms = Number(now - record[STARTED_AT]) / 1_000_000
+        this.emit(record)
+      }
+    }
+    this.inFlight.clear()
   }
 
   private getRecord(): CanonicalRecord | undefined {

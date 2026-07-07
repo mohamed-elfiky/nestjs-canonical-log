@@ -304,7 +304,7 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `http.route`                | http spans    | interceptor              | parameterized template, e.g. `/v1/jobs/:id`                              |
 | `http.response.status_code` | http spans    | interceptor / filter     |                                                                          |
 | `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable                           |
-| `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, or `"timeout"` (see TTL)                              |
+| `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, `"timeout"` (TTL expired), `"shutdown"` (app closed)  |
 | `stage`                     | —             | service (`stage()`)      | where the request was; defaults to `"request_started"`                   |
 | `error.type`                | error attrs   | filter                   | exception class name (queryable dimension)                               |
 | `error.message`             | error attrs   | filter                   | exception message (contextual, no stack; use an error tracker for that)  |
@@ -318,6 +318,7 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 ## Limitations
 
 - **HTTP requests only.** Background jobs (BullMQ, cron, queue workers) aren't wired. You get canonical lines for HTTP hops, not for the background work in between.
+- **SSE/streaming disconnects read as success.** When a client disconnects from a streaming endpoint mid-stream, the line emits with `outcome: "ok"`.
 
 ---
 

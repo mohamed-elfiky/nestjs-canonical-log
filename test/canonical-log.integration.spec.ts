@@ -368,6 +368,32 @@ describe('CanonicalLog — TTL timeout', () => {
   })
 })
 
+describe('CanonicalLog — shutdown flush', () => {
+  // No afterEach here: the test closes the app itself to trigger the
+  // shutdown hook, and closing twice would throw.
+  it('flushes in-flight records as outcome:shutdown on app close', async () => {
+    const { logs, logger } = makeCapturingLogger()
+    const app = await bootstrap(logger)
+    const cls = app.get(ClsService)
+    const svc = app.get(CanonicalLogService)
+
+    // Simulate a request that is still in flight when the app shuts down:
+    // initialize but never flush.
+    await cls.run(async () => {
+      svc.initialize()
+      svc.addFields({ 'test.marker': 'in-flight-at-shutdown' })
+    })
+
+    await app.close()
+
+    expect(logs).toHaveLength(1)
+    const line = logs[0]!
+    expect(line['outcome']).toBe('shutdown')
+    expect(line['test.marker']).toBe('in-flight-at-shutdown')
+    expect(line['duration_ms']).toEqual(expect.any(Number))
+  })
+})
+
 describe('CanonicalLog — internal field protection', () => {
   let app: INestApplication
   let logs: LogRecord[]
