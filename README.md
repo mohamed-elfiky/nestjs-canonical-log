@@ -216,7 +216,7 @@ Or bring your own by implementing `ICanonicalLogger` (two lines) and passing it 
 
 ### 1. AppModule wiring
 
-`ClsModule` must come **before** `CanonicalLogModule`:
+`ClsModule` must come **before** `CanonicalLogModule`. Call `forRoot()` once, in the root module — it registers globally.
 
 ```typescript
 @Module({

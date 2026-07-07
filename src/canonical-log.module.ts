@@ -1,4 +1,4 @@
-import { DynamicModule, Global, MiddlewareConsumer, Module, NestModule } from '@nestjs/common'
+import { DynamicModule, MiddlewareConsumer, Module, NestModule } from '@nestjs/common'
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core'
 import { PinoLogger } from 'nestjs-pino'
 import { ExpressAdapter } from './adapters/express.adapter'
@@ -15,7 +15,8 @@ import {
   type DefaultSharedFields,
 } from './canonical-log.types'
 
-@Global()
+// Registered via forRoot(), which sets `global: true` on the returned
+// DynamicModule — that's what makes it app-wide, no @Global() needed.
 @Module({})
 export class CanonicalLogModule implements NestModule {
   /**
@@ -37,7 +38,7 @@ export class CanonicalLogModule implements NestModule {
    * })
    *
    * // Fastify
-   * import { FastifyAdapter } from 'nestjs-canonical-log'
+   * import { FastifyAdapter } from 'nestjs-canonical-log/fastify'
    * CanonicalLogModule.forRoot({ 'service.name': 'my-api', adapter: new FastifyAdapter() })
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

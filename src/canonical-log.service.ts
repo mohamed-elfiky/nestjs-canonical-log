@@ -114,7 +114,10 @@ export class CanonicalLogService implements OnApplicationShutdown {
     // this middleware ran), do nothing.
     if (this.getRecord()) return
 
-    const record: CanonicalRecord = {
+    // Null prototype so a "__proto__" key passed to addFields() (e.g. someone
+    // forwarding request-derived data) lands as a plain own property instead
+    // of mutating the prototype chain. JSON serialization is unaffected.
+    const record: CanonicalRecord = Object.assign(Object.create(null) as CanonicalRecord, {
       [EMITTED]: false,
       [STARTED_AT]: process.hrtime.bigint(),
       timestamp: new Date().toISOString(),
@@ -123,7 +126,7 @@ export class CanonicalLogService implements OnApplicationShutdown {
       ...(this.options['deployment.environment']
         ? { 'deployment.environment': this.options['deployment.environment'] }
         : {}),
-    }
+    })
 
     this.cls.set(CANONICAL_LOG_RECORD_KEY, record)
     this.inFlight.add(record)

@@ -63,8 +63,9 @@ export class CanonicalLogExceptionFilter extends BaseExceptionFilter {
 
     this.svc.flush()
 
-    // Must come after flush() so the canonical line is emitted before the
-    // response is sent. So it's guaranteed to have the Correlation-ID header if the logger is configured to include it.
+    // Must come after flush() so the canonical line is emitted while the
+    // request's APM span is still open — that's when tracers (dd-trace, OTel)
+    // inject trace/span IDs into log lines for correlation.
     super.catch(exception, host)
   }
 }
