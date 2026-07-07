@@ -1,4 +1,5 @@
 # nestjs-canonical-log
+<img width="1024" height="323" alt="image" src="https://github.com/user-attachments/assets/3db5de13-bee8-4cff-9122-2fa6631b16f9" />
 
 One structured log line per HTTP request following the [Stripe canonical log line pattern](https://stripe.com/blog/canonical-log-lines).
 
