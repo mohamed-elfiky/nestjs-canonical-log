@@ -16,16 +16,12 @@ export class CanonicalLogMiddleware implements NestMiddleware {
   ) {}
 
   use(req: unknown, _res: unknown, next: () => void): void {
-    // Without an active CLS context every addFields/flush silently no-ops and
-    // zero canonical lines are emitted. That's a misconfiguration, not a
-    // runtime condition — surface it loudly once instead of failing silently.
+    // No CLS = no canonical logs at all. Warn once instead of failing silently.
     if (!this.cls.isActive()) {
       if (!this.warnedNoCls) {
         this.warnedNoCls = true
         this.nestLogger.warn(
-          'No active CLS context — canonical logs are disabled. ' +
-            'Mount ClsModule.forRoot({ global: true, middleware: { mount: true } }) ' +
-            'BEFORE CanonicalLogModule in your AppModule imports.',
+          'No active CLS context, canonical logs are disabled. Mount ClsModule before CanonicalLogModule.',
         )
       }
       return next()

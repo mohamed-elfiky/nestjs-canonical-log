@@ -63,18 +63,15 @@ export class CanonicalLogService implements OnApplicationShutdown {
     // and for exceptions that escape before any middleware runs.
     if (!this.cls.isActive()) return
 
-    // Lazily create the record if it doesn't exist yet. This way addFields()
-    // works even if it runs before CanonicalLogMiddleware — e.g. an auth
-    // middleware registered in AppModule.configure(), which NestJS mounts
-    // before imported modules' middleware.
+    // Lazily create the record so addFields() works even before our
+    // middleware runs (e.g. auth middleware mounted earlier).
     let record = this.getRecord()
     if (!record) {
       this.initialize()
       record = this.getRecord()
       if (!record) return
     }
-    // Already emitted (e.g. swept as timeout while the request was hanging):
-    // don't mutate a record the logger may have already serialized.
+    // Don't mutate a record the logger already consumed (e.g. swept as timeout).
     if (record[EMITTED]) return
     Object.assign(record, fields)
   }
@@ -114,9 +111,8 @@ export class CanonicalLogService implements OnApplicationShutdown {
     // this middleware ran), do nothing.
     if (this.getRecord()) return
 
-    // Null prototype so a "__proto__" key passed to addFields() (e.g. someone
-    // forwarding request-derived data) lands as a plain own property instead
-    // of mutating the prototype chain. JSON serialization is unaffected.
+    // Null prototype: a "__proto__" key in addFields() lands as a plain field
+    // instead of mutating the prototype chain.
     const record: CanonicalRecord = Object.assign(Object.create(null) as CanonicalRecord, {
       [EMITTED]: false,
       [STARTED_AT]: process.hrtime.bigint(),
@@ -185,14 +181,11 @@ export class CanonicalLogService implements OnApplicationShutdown {
     return this.cls.get<CanonicalRecord>(CANONICAL_LOG_RECORD_KEY)
   }
 
-  /**
-   * Start the timeout sweeper if not already running. One recurring timer for
-   * the whole app, not one per request. `.unref()` so it doesn't hold the
-   * process open on shutdown.
-   */
+  /** Start the timeout sweeper if not already running. One timer for the whole app. */
   private ensureSweeper(): void {
     if (this.sweeper) return
     this.sweeper = setInterval(() => this.sweep(), this.sweepIntervalMs)
+    // Don't let this timer keep the Node process alive on exit.
     this.sweeper.unref()
   }
 
