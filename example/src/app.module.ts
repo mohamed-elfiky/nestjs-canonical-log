@@ -31,6 +31,10 @@ import { JobsModule } from './jobs/jobs.module'
     CanonicalLogModule.forRoot({
       'service.name': 'example-api',
       'deployment.environment': process.env.NODE_ENV ?? 'development',
+      // Short TTL so the /jobs/hang demo emits its timeout line quickly.
+      // Production default is 30s.
+      recordTtlMs: 5_000,
+      sweepIntervalMs: 1_000,
     }),
 
     // AuthModule after the above — middleware in imported modules runs in

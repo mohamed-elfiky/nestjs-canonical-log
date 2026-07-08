@@ -91,6 +91,21 @@ Spans are the richer primitive. Canonical logs are the simpler one.
 
 **What you lose:** distributed call graph, waterfall of internal calls, auto-instrumentation of downstream clients. **What you keep:** group-by-anything queries, percentiles, error-rate SLOs, per-request triage. If you need the graph, run OpenTelemetry or `dd-trace` alongside. They're complementary.
 
+### Why not just pino-http?
+
+pino-http already emits one line per request, and nestjs-pino's `assign()` can even add fields to it. Two things it can't do:
+
+**A contract.** `assign()` takes `Record<string, any>`: no typed fields, no stage enum, nothing stopping `tenantId` / `tenant_id` drift across modules. `addFields<T>()` and `stage<T>()` are checked at compile time.
+
+**Requests that never finish.** pino-http logs on response completion. A handler stuck on a dead await never completes — and waiting forever is the shipped default in more places than you'd think (axios `timeout: 0`, pg-pool `connectionTimeoutMillis: 0`, Postgres `lock_timeout: 0`). So:
+
+| Scenario | pino-http | this library |
+| --- | --- | --- |
+| Client keeps waiting | nothing, indefinitely | `outcome: "timeout"` + `stage` at the TTL |
+| Client / LB gives up | `request aborted`, `statusCode: null`, no context | `outcome: "timeout"` + `stage` at the TTL |
+
+Measured against the [example app](./example/README.md): hit `/jobs/hang` and watch. The canonical line is the only one that says *where* the request was stuck, and it fires on a clock you control instead of the client's patience.
+
 ### PII
 
 Canonical logs concentrate risk. One line packs tenant, actor, and error message. This library does no redaction; configure redaction at your logger layer (e.g. pino's `redact` option, or your custom `ICanonicalLogger` implementation) and don't put raw PII in `addFields()`.

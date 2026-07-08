@@ -4,8 +4,7 @@
   "version": "0.0.0",
   "description": "Runnable NestJS example for nestjs-canonical-log",
   "scripts": {
-    "start": "tsx src/main.ts",
-    "dev": "tsx watch --clear-screen=false src/main.ts"
+    "start": "ts-node --transpile-only src/main.ts"
   },
   "dependencies": {
     "@nestjs/common": "10.2.10",

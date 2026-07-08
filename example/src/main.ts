@@ -36,6 +36,10 @@ Try these requests and watch the canonical log line emitted for each:
     -H 'Content-Type: application/json' \\
     -d '{"status":""}'
 
+  # timeout — hung request; the TTL sweep emits outcome:timeout with the
+  # stage after ~5s, even though the handler never returns
+  curl --max-time 3 http://localhost:${port}/jobs/hang
+
 `)
 }
 
