@@ -25,6 +25,12 @@ export interface FrameworkFields {
   /** 200, 404, 500, etc. */
   'http.response.status_code'?: number
 
+  /** Controller class name, e.g. "JobsController". Absent on unmatched routes. */
+  'code.namespace'?: string
+
+  /** Handler method name, e.g. "updateStatus". Absent on unmatched routes. */
+  'code.function'?: string
+
   /** How long the request took, in milliseconds. */
   duration_ms?: number
 

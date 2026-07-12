@@ -191,6 +191,9 @@ describe('CanonicalLog — HTTP success path', () => {
     expect(line['job.status_from']).toBe('scheduled')
     // stage is always present with the initial value unless overridden.
     expect(line['stage']).toBe('request_started')
+    // Controller + handler names, set by the interceptor after routing.
+    expect(line['code.namespace']).toBe('JobsController')
+    expect(line['code.function']).toBe('get')
   })
 
   it('emits the terminal stage set by the handler on success', async () => {

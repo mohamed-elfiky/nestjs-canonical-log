@@ -19,7 +19,13 @@ export class CanonicalLogInterceptor implements NestInterceptor {
     // useless as a query dimension. Now that the handler has resolved,
     // overwrite with the parameterized template (e.g. "/users/:id").
     const route = this.adapter.getRoutePath(req) ?? this.adapter.getRawPath(req)
-    this.svc.addFields({ 'http.route': route })
+    this.svc.addFields({
+      'http.route': route,
+      // Controller + handler names (OTEL code attrs). Low cardinality:
+      // enables per-module / per-handler metrics independent of route naming.
+      'code.namespace': context.getClass().name,
+      'code.function': context.getHandler().name,
+    })
 
     // finalize() fires before the exception filter, so on the error path we
     // skip flushing here and let the filter do it after enriching.

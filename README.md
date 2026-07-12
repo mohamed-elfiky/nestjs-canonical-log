@@ -318,6 +318,8 @@ Names follow [OTEL semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `http.request.method`       | http spans    | middleware               | uppercase verb                                                           |
 | `http.route`                | http spans    | interceptor              | parameterized template, e.g. `/v1/jobs/:id`                              |
 | `http.response.status_code` | http spans    | interceptor / filter     |                                                                          |
+| `code.namespace`            | code attrs    | interceptor              | controller class name, e.g. `JobsController`                            |
+| `code.function`             | code attrs    | interceptor              | handler method name, e.g. `updateStatus`                                |
 | `duration_ms`               | —             | interceptor / filter     | wall-clock ms; OTEL uses ns but ms is readable                           |
 | `outcome`                   | —             | interceptor / filter     | `"ok"`, `"error"`, `"timeout"` (TTL expired), `"shutdown"` (app closed)  |
 | `stage`                     | —             | service (`stage()`)      | where the request was; defaults to `"request_started"`                   |
