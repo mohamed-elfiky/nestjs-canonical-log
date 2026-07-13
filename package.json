@@ -1,6 +1,6 @@
 {
   "name": "nestjs-canonical-log",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Stripe-style canonical log lines for NestJS — one structured line per HTTP request",
   "keywords": [
     "nestjs",
