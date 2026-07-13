@@ -15,7 +15,7 @@ pnpm bench:profile
 
 ## What it measures
 
-Three scenarios run against two handlers each:
+Three scenarios run against one handler:
 
 **Scenarios:**
 1. `bare-nest`: no logging.
